@@ -10,6 +10,7 @@ from sqlglot.dialects.dialect import (
     unit_to_str,
 )
 from sqlglot.dialects.mysql import MySQL
+from sqlglot.tokens import TokenType
 
 
 class Doris(MySQL):
@@ -25,8 +26,20 @@ class Doris(MySQL):
             "MONTHS_ADD": exp.AddMonths.from_arg_list,
             "REGEXP": exp.RegexpLike.from_arg_list,
             "TO_DATE": exp.TsOrDsToDate.from_arg_list,
+            "GET_JSON_STRING": exp.JSONExtractScalar.from_arg_list,
+            "GET_JSON_BIGINT": exp.JSONExtractScalar.from_arg_list,
+            "GET_JSON_INT": exp.JSONExtractScalar.from_arg_list,
+            "GET_JSON_DOUBLE": exp.JSONExtractScalar.from_arg_list,
         }
 
+        FUNCTION_PARSERS = {
+            **MySQL.Parser.FUNCTION_PARSERS,
+            "GROUP_CONCAT": lambda self: self.expression(
+                exp.GroupConcat,
+                this=self._parse_column(),
+                separator=self._match(TokenType.COMMA) and self._parse_field(),
+            ),
+        }
     class Generator(MySQL.Generator):
         LAST_DAY_SUPPORTS_DATE_PART = False
 
