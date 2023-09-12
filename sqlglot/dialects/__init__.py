@@ -78,3 +78,4 @@ from sqlglot.dialects.tableau import Tableau
 from sqlglot.dialects.teradata import Teradata
 from sqlglot.dialects.trino import Trino
 from sqlglot.dialects.tsql import TSQL
+from sqlglot.dialects.clickzetta import ClickZetta

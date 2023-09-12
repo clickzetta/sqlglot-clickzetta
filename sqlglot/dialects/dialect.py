@@ -40,6 +40,7 @@ class Dialects(str, Enum):
     TRINO = "trino"
     TSQL = "tsql"
     Doris = "doris"
+    CLICKZETTA = "clickzetta"
 
 
 class _Dialect(type):
