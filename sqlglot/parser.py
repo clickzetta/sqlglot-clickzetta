@@ -215,6 +215,10 @@ class Parser(metaclass=_Parser):
         TokenType.MEDIUMINT: TokenType.UMEDIUMINT,
         TokenType.SMALLINT: TokenType.USMALLINT,
         TokenType.TINYINT: TokenType.UTINYINT,
+        # for float, double, decimal, just ignore unsigned https://dev.mysql.com/worklog/task/?id=12391
+        TokenType.FLOAT: TokenType.FLOAT,
+        TokenType.DOUBLE: TokenType.DOUBLE,
+        TokenType.DECIMAL: TokenType.DECIMAL,
     }
 
     SUBQUERY_PREDICATES = {
@@ -3651,7 +3655,9 @@ class Parser(metaclass=_Parser):
         if not self._match(TokenType.L_PAREN):
             return this
 
-        args = self._parse_csv(lambda: self._parse_constraint() or self._parse_field_def())
+        args = self._parse_csv(lambda: self._parse_field_def()
+                               if self._curr.token_type == TokenType.IDENTIFIER
+                               else (self._parse_constraint() or self._parse_field_def()))
 
         self._match_r_paren()
         return self.expression(exp.Schema, this=this, expressions=args)
