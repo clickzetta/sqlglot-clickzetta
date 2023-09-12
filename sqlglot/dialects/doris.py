@@ -9,6 +9,7 @@ from sqlglot.dialects.dialect import (
     time_format,
 )
 from sqlglot.dialects.mysql import MySQL
+from sqlglot.tokens import TokenType
 
 
 class Doris(MySQL):
@@ -21,8 +22,20 @@ class Doris(MySQL):
             **MySQL.Parser.FUNCTIONS,
             "DATE_TRUNC": parse_timestamp_trunc,
             "REGEXP": exp.RegexpLike.from_arg_list,
+            "GET_JSON_STRING": exp.JSONExtractScalar.from_arg_list,
+            "GET_JSON_BIGINT": exp.JSONExtractScalar.from_arg_list,
+            "GET_JSON_INT": exp.JSONExtractScalar.from_arg_list,
+            "GET_JSON_DOUBLE": exp.JSONExtractScalar.from_arg_list,
         }
 
+        FUNCTION_PARSERS = {
+            **MySQL.Parser.FUNCTION_PARSERS,
+            "GROUP_CONCAT": lambda self: self.expression(
+                exp.GroupConcat,
+                this=self._parse_column(),
+                separator=self._match(TokenType.COMMA) and self._parse_field(),
+            ),
+        }
     class Generator(MySQL.Generator):
         CAST_MAPPING = {}
 
