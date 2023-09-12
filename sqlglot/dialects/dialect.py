@@ -54,7 +54,8 @@ class Dialects(str, Enum):
     TERADATA = "teradata"
     TRINO = "trino"
     TSQL = "tsql"
-
+    Doris = "doris"
+    CLICKZETTA = "clickzetta"
 
 class NormalizationStrategy(str, AutoName):
     """Specifies the strategy according to which identifiers should be normalized."""
@@ -70,7 +71,6 @@ class NormalizationStrategy(str, AutoName):
 
     CASE_INSENSITIVE = auto()
     """Always case-insensitive, regardless of quotes."""
-
 
 class _Dialect(type):
     classes: t.Dict[str, t.Type[Dialect]] = {}
