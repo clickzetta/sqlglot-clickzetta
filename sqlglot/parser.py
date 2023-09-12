@@ -278,7 +278,14 @@ class Parser(metaclass=_Parser):
         TokenType.MEDIUMINT: TokenType.UMEDIUMINT,
         TokenType.SMALLINT: TokenType.USMALLINT,
         TokenType.TINYINT: TokenType.UTINYINT,
+<<<<<<< HEAD
         TokenType.DECIMAL: TokenType.UDECIMAL,
+=======
+        # for float, double, decimal, just ignore unsigned https://dev.mysql.com/worklog/task/?id=12391
+        TokenType.FLOAT: TokenType.FLOAT,
+        TokenType.DOUBLE: TokenType.DOUBLE,
+        TokenType.DECIMAL: TokenType.DECIMAL,
+>>>>>>> 2c722b73 (fix wrong parse if constraint keyword same to column name)
     }
 
     SUBQUERY_PREDICATES = {
@@ -4568,7 +4575,9 @@ class Parser(metaclass=_Parser):
         if self._match_set(self.SELECT_START_TOKENS):
             self._retreat(index)
             return this
-        args = self._parse_csv(lambda: self._parse_constraint() or self._parse_field_def())
+        args = self._parse_csv(lambda: self._parse_field_def()
+                               if self._curr.token_type == TokenType.IDENTIFIER
+                               else (self._parse_constraint() or self._parse_field_def()))
         self._match_r_paren()
         return self.expression(exp.Schema, this=this, expressions=args)
 
