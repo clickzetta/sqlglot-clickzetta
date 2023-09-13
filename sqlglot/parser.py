@@ -770,6 +770,7 @@ class Parser(metaclass=_Parser):
         "ANY_VALUE": lambda self: self._parse_any_value(),
         "CAST": lambda self: self._parse_cast(self.STRICT_CAST),
         "CONCAT": lambda self: self._parse_concat(),
+        "CONCAT_WS": lambda self: self._parse_concat_ws(),
         "CONVERT": lambda self: self._parse_convert(self.STRICT_CAST),
         "DECODE": lambda self: self._parse_decode(),
         "EXTRACT": lambda self: self._parse_extract(),
@@ -866,8 +867,6 @@ class Parser(metaclass=_Parser):
     LOG_BASE_FIRST = True
     LOG_DEFAULTS_TO_LN = False
 
-    SUPPORTS_USER_DEFINED_TYPES = True
-
     # Whether or not ADD is present for each column added by ALTER TABLE
     ALTER_TABLE_ADD_COLUMN_KEYWORD = True
 
@@ -895,6 +894,7 @@ class Parser(metaclass=_Parser):
     UNNEST_COLUMN_ONLY: bool = False
     ALIAS_POST_TABLESAMPLE: bool = False
     STRICT_STRING_CONCAT = False
+    SUPPORTS_USER_DEFINED_TYPES = True
     NORMALIZE_FUNCTIONS = "upper"
     NULL_ORDERING: str = "nulls_are_small"
     SHOW_TRIE: t.Dict = {}
@@ -1948,7 +1948,7 @@ class Parser(metaclass=_Parser):
 
     def _parse_update(self) -> exp.Update:
         comments = self._prev_comments
-        this = self._parse_table(alias_tokens=self.UPDATE_ALIAS_TOKENS)
+        this = self._parse_table(joins=True, alias_tokens=self.UPDATE_ALIAS_TOKENS)
         expressions = self._match(TokenType.SET) and self._parse_csv(self._parse_equality)
         returning = self._parse_returning()
         return self.expression(
@@ -3275,7 +3275,7 @@ class Parser(metaclass=_Parser):
                 if tokens[0].token_type in self.TYPE_TOKENS:
                     self._prev = tokens[0]
                 elif self.SUPPORTS_USER_DEFINED_TYPES:
-                    return identifier
+                    return exp.DataType.build(identifier.name, udt=True)
                 else:
                     return None
             else:
@@ -3896,6 +3896,9 @@ class Parser(metaclass=_Parser):
             exp.ForeignKey, expressions=expressions, reference=reference, **options  # type: ignore
         )
 
+    def _parse_primary_key_part(self) -> t.Optional[exp.Expression]:
+        return self._parse_field()
+
     def _parse_primary_key(
         self, wrapped_optional: bool = False, in_props: bool = False
     ) -> exp.PrimaryKeyColumnConstraint | exp.PrimaryKey:
@@ -3907,7 +3910,9 @@ class Parser(metaclass=_Parser):
         if not in_props and not self._match(TokenType.L_PAREN, advance=False):
             return self.expression(exp.PrimaryKeyColumnConstraint, desc=desc)
 
-        expressions = self._parse_wrapped_csv(self._parse_field, optional=wrapped_optional)
+        expressions = self._parse_wrapped_csv(
+            self._parse_primary_key_part, optional=wrapped_optional
+        )
         options = self._parse_key_constraint_options()
         return self.expression(exp.PrimaryKey, expressions=expressions, options=options)
 
@@ -4074,11 +4079,7 @@ class Parser(metaclass=_Parser):
     def _parse_concat(self) -> t.Optional[exp.Expression]:
         args = self._parse_csv(self._parse_conjunction)
         if self.CONCAT_NULL_OUTPUTS_STRING:
-            args = [
-                exp.func("COALESCE", exp.cast(arg, "text"), exp.Literal.string(""))
-                for arg in args
-                if arg
-            ]
+            args = self._ensure_string_if_null(args)
 
         # Some dialects (e.g. Trino) don't allow a single-argument CONCAT call, so when
         # we find such a call we replace it with its argument.
@@ -4088,6 +4089,16 @@ class Parser(metaclass=_Parser):
         return self.expression(
             exp.Concat if self.STRICT_STRING_CONCAT else exp.SafeConcat, expressions=args
         )
+
+    def _parse_concat_ws(self) -> t.Optional[exp.Expression]:
+        args = self._parse_csv(self._parse_conjunction)
+        if len(args) < 2:
+            return self.expression(exp.ConcatWs, expressions=args)
+        delim, *values = args
+        if self.CONCAT_NULL_OUTPUTS_STRING:
+            values = self._ensure_string_if_null(values)
+
+        return self.expression(exp.ConcatWs, expressions=[delim] + values)
 
     def _parse_string_agg(self) -> exp.Expression:
         if self._match(TokenType.DISTINCT):
@@ -5000,9 +5011,12 @@ class Parser(metaclass=_Parser):
         self._match_r_paren()
         return self.expression(exp.DictRange, this=this, min=min, max=max)
 
-    def _parse_comprehension(self, this: exp.Expression) -> exp.Comprehension:
+    def _parse_comprehension(self, this: exp.Expression) -> t.Optional[exp.Comprehension]:
+        index = self._index
         expression = self._parse_column()
-        self._match(TokenType.IN)
+        if not self._match(TokenType.IN):
+            self._retreat(index - 1)
+            return None
         iterator = self._parse_column()
         condition = self._parse_conjunction() if self._match_text_seq("IF") else None
         return self.expression(
@@ -5146,3 +5160,10 @@ class Parser(metaclass=_Parser):
                     else:
                         column.replace(dot_or_id)
         return node
+
+    def _ensure_string_if_null(self, values: t.List[exp.Expression]) -> t.List[exp.Expression]:
+        return [
+            exp.func("COALESCE", exp.cast(value, "text"), exp.Literal.string(""))
+            for value in values
+            if value
+        ]

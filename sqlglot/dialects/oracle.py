@@ -108,7 +108,7 @@ class Oracle(Dialect):
             error_handling = self._parse_on_handling("ERROR", "ERROR", "NULL")
             empty_handling = self._parse_on_handling("EMPTY", "ERROR", "NULL")
             self._match(TokenType.COLUMN)
-            expressions = self._parse_wrapped_csv(self._parse_json_column_def)
+            expressions = self._parse_wrapped_csv(self._parse_json_column_def, optional=True)
 
             return exp.JSONTable(
                 this=this,

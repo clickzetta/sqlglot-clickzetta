@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import typing as t
 from enum import Enum
+from functools import reduce
 
 from sqlglot import exp
 from sqlglot._typing import E
@@ -152,6 +153,9 @@ class Dialect(metaclass=_Dialect):
 
     # Determines whether or not CONCAT's arguments must be strings
     STRICT_STRING_CONCAT = False
+
+    # Determines whether or not user-defined data types are supported
+    SUPPORTS_USER_DEFINED_TYPES = True
 
     # Determines how function names are going to be normalized
     NORMALIZE_FUNCTIONS: bool | str = "upper"
@@ -657,11 +661,18 @@ def ts_or_ds_to_date_sql(dialect: str) -> t.Callable:
 
 def concat_to_dpipe_sql(self: Generator, expression: exp.Concat | exp.SafeConcat) -> str:
     expression = expression.copy()
-    this, *rest_args = expression.expressions
-    for arg in rest_args:
-        this = exp.DPipe(this=this, expression=arg)
+    return self.sql(reduce(lambda x, y: exp.DPipe(this=x, expression=y), expression.expressions))
 
-    return self.sql(this)
+
+def concat_ws_to_dpipe_sql(self: Generator, expression: exp.ConcatWs) -> str:
+    expression = expression.copy()
+    delim, *rest_args = expression.expressions
+    return self.sql(
+        reduce(
+            lambda x, y: exp.DPipe(this=x, expression=exp.DPipe(this=delim, expression=y)),
+            rest_args,
+        )
+    )
 
 
 def regexp_extract_sql(self: Generator, expression: exp.RegexpExtract) -> str:

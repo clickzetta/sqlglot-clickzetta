@@ -99,6 +99,7 @@ class MySQL(Dialect):
 
     TIME_FORMAT = "'%Y-%m-%d %T'"
     DPIPE_IS_STRING_CONCAT = False
+    SUPPORTS_USER_DEFINED_TYPES = False
 
     # https://prestodb.io/docs/current/functions/datetime.html#mysql-date-functions
     TIME_MAPPING = {
@@ -119,7 +120,7 @@ class MySQL(Dialect):
         QUOTES = ["'", '"']
         COMMENTS = ["--", "#", ("/*", "*/")]
         IDENTIFIERS = ["`"]
-        STRING_ESCAPES = ["'", "\\"]
+        STRING_ESCAPES = ["'", '"', "\\"]
         BIT_STRINGS = [("b'", "'"), ("B'", "'"), ("0b", "")]
         HEX_STRINGS = [("x'", "'"), ("X'", "'"), ("0x", "")]
 
@@ -193,8 +194,6 @@ class MySQL(Dialect):
         COMMANDS = tokens.Tokenizer.COMMANDS - {TokenType.SHOW}
 
     class Parser(parser.Parser):
-        SUPPORTS_USER_DEFINED_TYPES = False
-
         FUNC_TOKENS = {
             *parser.Parser.FUNC_TOKENS,
             TokenType.DATABASE,
@@ -357,6 +356,15 @@ class MySQL(Dialect):
         }
 
         LOG_DEFAULTS_TO_LN = True
+
+        def _parse_primary_key_part(self) -> t.Optional[exp.Expression]:
+            this = self._parse_id_var()
+            if not self._match(TokenType.L_PAREN):
+                return this
+
+            expression = self._parse_number()
+            self._match_r_paren()
+            return self.expression(exp.ColumnPrefix, this=this, expression=expression)
 
         def _parse_index_constraint(
             self, kind: t.Optional[str] = None

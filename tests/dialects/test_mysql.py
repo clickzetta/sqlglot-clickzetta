@@ -27,6 +27,9 @@ class TestMySQL(Validator):
         self.validate_identity("CREATE TABLE foo (a BIGINT, FULLTEXT INDEX (b))")
         self.validate_identity("CREATE TABLE foo (a BIGINT, SPATIAL INDEX (b))")
         self.validate_identity(
+            "CREATE TABLE `x` (`username` VARCHAR(200), PRIMARY KEY (`username`(16)))"
+        )
+        self.validate_identity(
             "UPDATE items SET items.price = 0 WHERE items.id >= 5 ORDER BY items.id LIMIT 10"
         )
         self.validate_identity(
@@ -240,6 +243,15 @@ class TestMySQL(Validator):
         )
 
     def test_escape(self):
+        self.validate_identity("""'"abc"'""")
+        self.validate_identity(
+            r"'\'a'",
+            "'''a'",
+        )
+        self.validate_identity(
+            '''"'abc'"''',
+            "'''abc'''",
+        )
         self.validate_all(
             r"'a \' b '' '",
             write={
@@ -525,6 +537,7 @@ class TestMySQL(Validator):
                 "mysql": "SELECT DATE(DATE_SUB(`dt`, INTERVAL (DAYOFMONTH(`dt`) - 1) DAY)) AS __timestamp FROM tableT",
             },
         )
+        self.validate_identity("SELECT name FROM temp WHERE name = ? FOR UPDATE")
         self.validate_all(
             "SELECT a FROM tbl FOR UPDATE",
             write={
@@ -533,7 +546,7 @@ class TestMySQL(Validator):
                 "oracle": "SELECT a FROM tbl FOR UPDATE",
                 "postgres": "SELECT a FROM tbl FOR UPDATE",
                 "redshift": "SELECT a FROM tbl",
-                "tsql": "SELECT a FROM tbl FOR UPDATE",
+                "tsql": "SELECT a FROM tbl",
             },
         )
         self.validate_all(
@@ -543,7 +556,7 @@ class TestMySQL(Validator):
                 "mysql": "SELECT a FROM tbl FOR SHARE",
                 "oracle": "SELECT a FROM tbl FOR SHARE",
                 "postgres": "SELECT a FROM tbl FOR SHARE",
-                "tsql": "SELECT a FROM tbl FOR SHARE",
+                "tsql": "SELECT a FROM tbl",
             },
         )
         self.validate_all(
