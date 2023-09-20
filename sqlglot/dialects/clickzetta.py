@@ -3,6 +3,9 @@ from __future__ import annotations
 from sqlglot import exp, transforms
 from sqlglot.dialects.spark import Spark
 from sqlglot.tokens import Tokenizer, TokenType
+from sqlglot.dialects.dialect import (
+    rename_func,
+)
 
 def _transform_create(expression: exp.Expression) -> exp.Expression:
     """Remove index column constraints.
@@ -67,6 +70,7 @@ class ClickZetta(Spark):
             exp.CharacterSetColumnConstraint: lambda self, e: '',
             exp.Create: transforms.preprocess([_transform_create]),
             exp.GroupConcat: _groupconcat_to_wmconcat,
+            exp.AesDecrypt: rename_func("AES_DECRYPT_MYSQL")
         }
 
         def datatype_sql(self, expression: exp.DataType) -> str:

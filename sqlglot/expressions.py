@@ -4464,6 +4464,8 @@ class Greatest(Func):
 class GroupConcat(AggFunc):
     arg_types = {"this": True, "separator": False}
 
+class AesDecrypt(Func):
+    arg_types = {"this": True, "key": True}
 
 class Hex(Func):
     pass

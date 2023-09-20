@@ -92,6 +92,9 @@ def _date_add_sql(kind: str) -> t.Callable[[MySQL.Generator, exp.DateAdd | exp.D
 
     return func
 
+def _parse_aes_decrypt(self:MySQL.Generator) -> exp.AesDecrypt:
+    args = self._parse_csv(self._parse_conjunction)
+    return self.expression(exp.AesDecrypt, this=seq_get(args, 0), key=seq_get(args, 1))
 
 class MySQL(Dialect):
     # https://dev.mysql.com/doc/refman/8.0/en/identifiers.html
@@ -247,6 +250,7 @@ class MySQL(Dialect):
             "VALUES": lambda self: self.expression(
                 exp.Anonymous, this="VALUES", expressions=[self._parse_id_var()]
             ),
+            "AES_DECRYPT": _parse_aes_decrypt,
         }
 
         STATEMENT_PARSERS = {
