@@ -25,7 +25,7 @@ class TestSessionCaseSensitivity(DataFrameTestBase):
             '"Test"',
             {"name": "VARCHAR"},
             "name",
-            '''SELECT "TEST"."NAME" AS "NAME" FROM "Test" AS "TEST"''',
+            '''SELECT "Test"."NAME" AS "NAME" FROM "Test" AS "Test"''',
         ),
         (
             "Column has CS while table does not",
@@ -41,7 +41,7 @@ class TestSessionCaseSensitivity(DataFrameTestBase):
             '"Test"',
             {'"Name"': "VARCHAR"},
             '"Name"',
-            '''SELECT "TEST"."Name" AS "Name" FROM "Test" AS "TEST"''',
+            '''SELECT "Test"."Name" AS "Name" FROM "Test" AS "Test"''',
         ),
         (
             "Lowercase CS table and column",
@@ -49,7 +49,7 @@ class TestSessionCaseSensitivity(DataFrameTestBase):
             '"test"',
             {'"name"': "VARCHAR"},
             '"name"',
-            '''SELECT "TEST"."name" AS "name" FROM "test" AS "TEST"''',
+            '''SELECT "test"."name" AS "name" FROM "test" AS "test"''',
         ),
         (
             "CS table and column and query table but no CS in query column",
@@ -79,3 +79,9 @@ class TestSessionCaseSensitivity(DataFrameTestBase):
                         df.sql()
                 else:
                     self.compare_sql(df, expected)
+
+    def test_alias(self):
+        col = F.col('"Name"')
+        self.assertEqual(col.sql(dialect=self.spark.dialect), '"Name"')
+        self.assertEqual(col.alias("nAME").sql(dialect=self.spark.dialect), '"Name" AS NAME')
+        self.assertEqual(col.alias('"nAME"').sql(dialect=self.spark.dialect), '"Name" AS "nAME"')

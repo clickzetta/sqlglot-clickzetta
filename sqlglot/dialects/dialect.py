@@ -126,6 +126,12 @@ class _Dialect(type):
         if not klass.STRICT_STRING_CONCAT and klass.DPIPE_IS_STRING_CONCAT:
             klass.parser_class.BITWISE[TokenType.DPIPE] = exp.SafeDPipe
 
+        if not klass.SUPPORTS_SEMI_ANTI_JOIN:
+            klass.parser_class.TABLE_ALIAS_TOKENS = klass.parser_class.TABLE_ALIAS_TOKENS | {
+                TokenType.ANTI,
+                TokenType.SEMI,
+            }
+
         klass.generator_class.can_identify = klass.can_identify
 
         return klass
@@ -156,6 +162,9 @@ class Dialect(metaclass=_Dialect):
 
     # Determines whether or not user-defined data types are supported
     SUPPORTS_USER_DEFINED_TYPES = True
+
+    # Determines whether or not SEMI/ANTI JOINs are supported
+    SUPPORTS_SEMI_ANTI_JOIN = True
 
     # Determines how function names are going to be normalized
     NORMALIZE_FUNCTIONS: bool | str = "upper"
@@ -332,10 +341,18 @@ def approx_count_distinct_sql(self: Generator, expression: exp.ApproxDistinct) -
     return self.func("APPROX_COUNT_DISTINCT", expression.this)
 
 
-def if_sql(self: Generator, expression: exp.If) -> str:
-    return self.func(
-        "IF", expression.this, expression.args.get("true"), expression.args.get("false")
-    )
+def if_sql(
+    name: str = "IF", false_value: t.Optional[exp.Expression | str] = None
+) -> t.Callable[[Generator, exp.If], str]:
+    def _if_sql(self: Generator, expression: exp.If) -> str:
+        return self.func(
+            name,
+            expression.this,
+            expression.args.get("true"),
+            expression.args.get("false") or false_value,
+        )
+
+    return _if_sql
 
 
 def arrow_json_extract_sql(self: Generator, expression: exp.JSONExtract | exp.JSONBExtract) -> str:
@@ -550,6 +567,19 @@ def date_trunc_to_time(args: t.List) -> exp.DateTrunc | exp.TimestampTrunc:
     return exp.TimestampTrunc(this=this, unit=unit)
 
 
+def date_add_interval_sql(
+    data_type: str, kind: str
+) -> t.Callable[[Generator, exp.Expression], str]:
+    def func(self: Generator, expression: exp.Expression) -> str:
+        this = self.sql(expression, "this")
+        unit = expression.args.get("unit")
+        unit = exp.var(unit.name.upper() if unit else "DAY")
+        interval = exp.Interval(this=expression.expression.copy(), unit=unit)
+        return f"{data_type}_{kind}({this}, {self.sql(interval)})"
+
+    return func
+
+
 def timestamptrunc_sql(self: Generator, expression: exp.TimestampTrunc) -> str:
     return self.func(
         "DATE_TRUNC", exp.Literal.string(expression.text("unit") or "day"), expression.this
@@ -739,6 +769,22 @@ def any_value_to_max_sql(self: Generator, expression: exp.AnyValue) -> str:
     return self.func("MAX", expression.this)
 
 
+def bool_xor_sql(self: Generator, expression: exp.Xor) -> str:
+    a = self.sql(expression.left)
+    b = self.sql(expression.right)
+    return f"({a} AND (NOT {b})) OR ((NOT {a}) AND {b})"
+
+
 # Used to generate JSON_OBJECT with a comma in BigQuery and MySQL instead of colon
-def json_keyvalue_comma_sql(self, expression: exp.JSONKeyValue) -> str:
+def json_keyvalue_comma_sql(self: Generator, expression: exp.JSONKeyValue) -> str:
     return f"{self.sql(expression, 'this')}, {self.sql(expression, 'expression')}"
+
+
+def is_parse_json(expression: exp.Expression) -> bool:
+    return isinstance(expression, exp.ParseJSON) or (
+        isinstance(expression, exp.Cast) and expression.is_type("json")
+    )
+
+
+def isnull_to_is_null(args: t.List) -> exp.Expression:
+    return exp.Paren(this=exp.Is(this=seq_get(args, 0), expression=exp.null()))

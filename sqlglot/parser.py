@@ -320,6 +320,7 @@ class Parser(metaclass=_Parser):
     INTERVAL_VARS = ID_VAR_TOKENS - {TokenType.END}
 
     TABLE_ALIAS_TOKENS = ID_VAR_TOKENS - {
+        TokenType.ANTI,
         TokenType.APPLY,
         TokenType.ASOF,
         TokenType.FULL,
@@ -328,6 +329,7 @@ class Parser(metaclass=_Parser):
         TokenType.NATURAL,
         TokenType.OFFSET,
         TokenType.RIGHT,
+        TokenType.SEMI,
         TokenType.WINDOW,
     }
 
@@ -824,7 +826,9 @@ class Parser(metaclass=_Parser):
 
     SHOW_PARSERS: t.Dict[str, t.Callable] = {}
 
-    TYPE_LITERAL_PARSERS: t.Dict[exp.DataType.Type, t.Callable] = {}
+    TYPE_LITERAL_PARSERS = {
+        exp.DataType.Type.JSON: lambda self, this, _: self.expression(exp.ParseJSON, this=this),
+    }
 
     MODIFIABLES = (exp.Subquery, exp.Subqueryable, exp.Table)
 
@@ -852,9 +856,13 @@ class Parser(metaclass=_Parser):
     WINDOW_BEFORE_PAREN_TOKENS = {TokenType.OVER}
     WINDOW_SIDES = {"FOLLOWING", "PRECEDING"}
 
+    FETCH_TOKENS = ID_VAR_TOKENS - {TokenType.ROW, TokenType.ROWS, TokenType.PERCENT}
+
     ADD_CONSTRAINT_TOKENS = {TokenType.CONSTRAINT, TokenType.PRIMARY_KEY, TokenType.FOREIGN_KEY}
 
     DISTINCT_TOKENS = {TokenType.DISTINCT}
+
+    NULL_TOKENS = {TokenType.NULL}
 
     STRICT_CAST = True
 
@@ -2634,25 +2642,27 @@ class Parser(metaclass=_Parser):
             return None
 
         expressions = self._parse_wrapped_csv(self._parse_type)
-        ordinality = self._match_pair(TokenType.WITH, TokenType.ORDINALITY)
+        offset = self._match_pair(TokenType.WITH, TokenType.ORDINALITY)
 
         alias = self._parse_table_alias() if with_alias else None
 
-        if alias and self.UNNEST_COLUMN_ONLY:
-            if alias.args.get("columns"):
-                self.raise_error("Unexpected extra column alias in unnest.")
+        if alias:
+            if self.UNNEST_COLUMN_ONLY:
+                if alias.args.get("columns"):
+                    self.raise_error("Unexpected extra column alias in unnest.")
 
-            alias.set("columns", [alias.this])
-            alias.set("this", None)
+                alias.set("columns", [alias.this])
+                alias.set("this", None)
 
-        offset = None
-        if self._match_pair(TokenType.WITH, TokenType.OFFSET):
+            columns = alias.args.get("columns") or []
+            if offset and len(expressions) < len(columns):
+                offset = columns.pop()
+
+        if not offset and self._match_pair(TokenType.WITH, TokenType.OFFSET):
             self._match(TokenType.ALIAS)
             offset = self._parse_id_var() or exp.to_identifier("offset")
 
-        return self.expression(
-            exp.Unnest, expressions=expressions, ordinality=ordinality, alias=alias, offset=offset
-        )
+        return self.expression(exp.Unnest, expressions=expressions, alias=alias, offset=offset)
 
     def _parse_derived_table_values(self) -> t.Optional[exp.Values]:
         is_derived = self._match_pair(TokenType.L_PAREN, TokenType.VALUES)
@@ -2695,7 +2705,7 @@ class Parser(metaclass=_Parser):
             expressions = self._parse_csv(self._parse_primary)
         else:
             expressions = None
-            num = self._parse_number()
+            num = self._parse_primary()
 
         if self._match_text_seq("BUCKET"):
             bucket_numerator = self._parse_number()
@@ -2917,6 +2927,10 @@ class Parser(metaclass=_Parser):
         )
         connect = self._parse_conjunction()
         self.NO_PAREN_FUNCTION_PARSERS.pop("PRIOR")
+
+        if not start and self._match(TokenType.START_WITH):
+            start = self._parse_conjunction()
+
         return self.expression(exp.Connect, start=start, connect=connect)
 
     def _parse_order(
@@ -2936,20 +2950,20 @@ class Parser(metaclass=_Parser):
 
     def _parse_ordered(self) -> exp.Ordered:
         this = self._parse_conjunction()
-        self._match(TokenType.ASC)
 
-        is_desc = self._match(TokenType.DESC)
+        asc = self._match(TokenType.ASC)
+        desc = self._match(TokenType.DESC) or (asc and False)
+
         is_nulls_first = self._match_text_seq("NULLS", "FIRST")
         is_nulls_last = self._match_text_seq("NULLS", "LAST")
-        desc = is_desc or False
-        asc = not desc
+
         nulls_first = is_nulls_first or False
         explicitly_null_ordered = is_nulls_first or is_nulls_last
 
         if (
             not explicitly_null_ordered
             and (
-                (asc and self.NULL_ORDERING == "nulls_are_small")
+                (not desc and self.NULL_ORDERING == "nulls_are_small")
                 or (desc and self.NULL_ORDERING != "nulls_are_small")
             )
             and self.NULL_ORDERING != "nulls_are_last"
@@ -2988,7 +3002,7 @@ class Parser(metaclass=_Parser):
             direction = self._match_set((TokenType.FIRST, TokenType.NEXT))
             direction = self._prev.text if direction else "FIRST"
 
-            count = self._parse_number()
+            count = self._parse_field(tokens=self.FETCH_TOKENS)
             percent = self._match(TokenType.PERCENT)
 
             self._match_set((TokenType.ROW, TokenType.ROWS))
@@ -3243,7 +3257,7 @@ class Parser(metaclass=_Parser):
                 return self._parse_column()
             return self._parse_column_ops(data_type)
 
-        return this
+        return this and self._parse_column_ops(this)
 
     def _parse_type_size(self) -> t.Optional[exp.DataTypeParam]:
         this = self._parse_type()
@@ -3275,7 +3289,12 @@ class Parser(metaclass=_Parser):
                 if tokens[0].token_type in self.TYPE_TOKENS:
                     self._prev = tokens[0]
                 elif self.SUPPORTS_USER_DEFINED_TYPES:
-                    return exp.DataType.build(identifier.name, udt=True)
+                    type_name = identifier.name
+
+                    while self._match(TokenType.DOT):
+                        type_name = f"{type_name}.{self._advance_any() and self._prev.text}"
+
+                    return exp.DataType.build(type_name, udt=True)
                 else:
                     return None
             else:
@@ -3821,7 +3840,9 @@ class Parser(metaclass=_Parser):
     def _parse_unique(self) -> exp.UniqueColumnConstraint:
         self._match_text_seq("KEY")
         return self.expression(
-            exp.UniqueColumnConstraint, this=self._parse_schema(self._parse_id_var(any_token=False))
+            exp.UniqueColumnConstraint,
+            this=self._parse_schema(self._parse_id_var(any_token=False)),
+            index_type=self._match(TokenType.USING) and self._advance_any() and self._prev.text,
         )
 
     def _parse_key_constraint_options(self) -> t.List[str]:
@@ -4564,7 +4585,7 @@ class Parser(metaclass=_Parser):
         return self._parse_var() or self._parse_string()
 
     def _parse_null(self) -> t.Optional[exp.Expression]:
-        if self._match(TokenType.NULL):
+        if self._match_set(self.NULL_TOKENS):
             return self.PRIMARY_PARSERS[TokenType.NULL](self, self._prev)
         return self._parse_placeholder()
 

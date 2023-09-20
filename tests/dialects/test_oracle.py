@@ -6,6 +6,7 @@ class TestOracle(Validator):
     dialect = "oracle"
 
     def test_oracle(self):
+        self.validate_identity("SELECT x FROM t WHERE cond FOR UPDATE")
         self.validate_identity("SELECT JSON_OBJECT(k1: v1 FORMAT JSON, k2: v2 FORMAT JSON)")
         self.validate_identity("SELECT JSON_OBJECT('name': first_name || ' ' || last_name) FROM t")
         self.validate_identity("COALESCE(c1, c2, c3)")
@@ -50,6 +51,14 @@ class TestOracle(Validator):
             "SELECT UNIQUE col1, col2 FROM table",
             "SELECT DISTINCT col1, col2 FROM table",
         )
+        self.validate_identity(
+            "SELECT * FROM T ORDER BY I OFFSET nvl(:variable1, 10) ROWS FETCH NEXT nvl(:variable2, 10) ROWS ONLY",
+            "SELECT * FROM T ORDER BY I OFFSET COALESCE(:variable1, 10) ROWS FETCH NEXT COALESCE(:variable2, 10) ROWS ONLY",
+        )
+        self.validate_identity(
+            "SELECT * FROM t SAMPLE (.25)",
+            "SELECT * FROM t SAMPLE (0.25)",
+        )
 
         self.validate_all(
             "NVL(NULL, 1)",
@@ -80,6 +89,16 @@ class TestOracle(Validator):
             write={
                 "oracle": "CAST(x AS FLOAT)",
                 "": "CAST(x AS FLOAT)",
+            },
+        )
+        self.validate_all(
+            "CAST(x AS sch.udt)",
+            read={
+                "postgres": "CAST(x AS sch.udt)",
+            },
+            write={
+                "oracle": "CAST(x AS sch.udt)",
+                "postgres": "CAST(x AS sch.udt)",
             },
         )
 
@@ -218,3 +237,25 @@ INNER JOIN JSON_TABLE(:emps, '$[*]' COLUMNS (empno NUMBER PATH '$')) jt
   ON ar.empno = jt.empno""",
             pretty=True,
         )
+
+    def test_connect_by(self):
+        start = "START WITH last_name = 'King'"
+        connect = "CONNECT BY PRIOR employee_id = manager_id AND LEVEL <= 4"
+        body = """
+            SELECT last_name "Employee",
+            LEVEL, SYS_CONNECT_BY_PATH(last_name, '/') "Path"
+            FROM employees
+            WHERE level <= 3 AND department_id = 80
+        """
+        pretty = """SELECT
+  last_name AS "Employee",
+  LEVEL,
+  SYS_CONNECT_BY_PATH(last_name, '/') AS "Path"
+FROM employees
+START WITH last_name = 'King'
+CONNECT BY PRIOR employee_id = manager_id AND LEVEL <= 4
+WHERE
+  level <= 3 AND department_id = 80"""
+
+        for query in (f"{body}{start}{connect}", f"{body}{connect}{start}"):
+            self.validate_identity(query, pretty, pretty=True)

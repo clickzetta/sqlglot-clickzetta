@@ -9,6 +9,7 @@ from sqlglot.dialects.dialect import (
     create_with_partitions_sql,
     format_time_lambda,
     if_sql,
+    is_parse_json,
     left_to_substring_sql,
     locate_to_strposition,
     max_or_greatest,
@@ -89,7 +90,7 @@ def _date_diff_sql(self: Hive.Generator, expression: exp.DateDiff) -> str:
 
 def _json_format_sql(self: Hive.Generator, expression: exp.JSONFormat) -> str:
     this = expression.this
-    if isinstance(this, exp.Cast) and this.is_type("json") and this.this.is_string:
+    if is_parse_json(this) and this.this.is_string:
         # Since FROM_JSON requires a nested type, we always wrap the json string with
         # an array to ensure that "naked" strings like "'a'" will be handled correctly
         wrapped_json = exp.Literal.string(f"[{this.this.name}]")
@@ -412,7 +413,7 @@ class Hive(Dialect):
             exp.DiToDate: lambda self, e: f"TO_DATE(CAST({self.sql(e, 'this')} AS STRING), {Hive.DATEINT_FORMAT})",
             exp.FileFormatProperty: lambda self, e: f"STORED AS {self.sql(e, 'this') if isinstance(e.this, exp.InputOutputFormat) else e.name.upper()}",
             exp.FromBase64: rename_func("UNBASE64"),
-            exp.If: if_sql,
+            exp.If: if_sql(),
             exp.ILike: no_ilike_sql,
             exp.IsNan: rename_func("ISNAN"),
             exp.JSONExtract: rename_func("GET_JSON_OBJECT"),
@@ -465,6 +466,11 @@ class Hive(Dialect):
             exp.NumberToStr: rename_func("FORMAT_NUMBER"),
             exp.LastDateOfMonth: rename_func("LAST_DAY"),
             exp.National: lambda self, e: self.national_sql(e, prefix=""),
+            exp.ClusteredColumnConstraint: lambda self, e: f"({self.expressions(e, 'this', indent=False)})",
+            exp.NonClusteredColumnConstraint: lambda self, e: f"({self.expressions(e, 'this', indent=False)})",
+            exp.NotForReplicationColumnConstraint: lambda self, e: "",
+            exp.OnProperty: lambda self, e: "",
+            exp.PrimaryKeyColumnConstraint: lambda self, e: "PRIMARY KEY",
         }
 
         PROPERTIES_LOCATION = {
@@ -473,6 +479,25 @@ class Hive(Dialect):
             exp.PartitionedByProperty: exp.Properties.Location.POST_SCHEMA,
             exp.VolatileProperty: exp.Properties.Location.UNSUPPORTED,
         }
+
+        def schema_sql(self, expression: exp.Schema) -> str:
+            expression = expression.copy()
+
+            for ordered in expression.find_all(exp.Ordered):
+                if ordered.args.get("desc") is False:
+                    ordered.set("desc", None)
+
+            return super().schema_sql(expression)
+
+        def constraint_sql(self, expression: exp.Constraint) -> str:
+            expression = expression.copy()
+
+            for prop in list(expression.find_all(exp.Properties)):
+                prop.pop()
+
+            this = self.sql(expression, "this")
+            expressions = self.expressions(expression, sep=" ", flat=True)
+            return f"CONSTRAINT {this} {expressions}"
 
         def rowformatserdeproperty_sql(self, expression: exp.RowFormatSerdeProperty) -> str:
             serde_props = self.sql(expression, "serde_properties")

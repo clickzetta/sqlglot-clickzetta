@@ -1321,7 +1321,13 @@ class GeneratedAsIdentityColumnConstraint(ColumnConstraintKind):
 
 # https://dev.mysql.com/doc/refman/8.0/en/create-table.html
 class IndexColumnConstraint(ColumnConstraintKind):
-    arg_types = {"this": False, "schema": True, "kind": False, "type": False, "options": False}
+    arg_types = {
+        "this": False,
+        "schema": True,
+        "kind": False,
+        "index_type": False,
+        "options": False,
+    }
 
 
 class InlineLengthColumnConstraint(ColumnConstraintKind):
@@ -1354,7 +1360,7 @@ class TitleColumnConstraint(ColumnConstraintKind):
 
 
 class UniqueColumnConstraint(ColumnConstraintKind):
-    arg_types = {"this": False}
+    arg_types = {"this": False, "index_type": False}
 
 
 class UppercaseColumnConstraint(ColumnConstraintKind):
@@ -1911,7 +1917,7 @@ class Sort(Order):
 
 
 class Ordered(Expression):
-    arg_types = {"this": True, "desc": True, "nulls_first": True}
+    arg_types = {"this": True, "desc": False, "nulls_first": True}
 
 
 class Property(Expression):
@@ -2563,7 +2569,6 @@ class Intersect(Union):
 class Unnest(UDTF):
     arg_types = {
         "expressions": True,
-        "ordinality": False,
         "alias": False,
         "offset": False,
     }
@@ -2856,6 +2861,7 @@ class Select(Subqueryable):
             prefix="LIMIT",
             dialect=dialect,
             copy=copy,
+            into_arg="expression",
             **opts,
         )
 
@@ -4366,6 +4372,10 @@ class Extract(Func):
     arg_types = {"this": True, "expression": True}
 
 
+class Timestamp(Func):
+    arg_types = {"this": False, "expression": False}
+
+
 class TimestampAdd(Func, TimeUnit):
     arg_types = {"this": True, "expression": True, "unit": False}
 
@@ -4417,7 +4427,8 @@ class DateToDi(Func):
 
 # https://cloud.google.com/bigquery/docs/reference/standard-sql/date_functions#date
 class Date(Func):
-    arg_types = {"this": True, "zone": False}
+    arg_types = {"this": False, "zone": False, "expressions": False}
+    is_var_len_args = True
 
 
 class Day(Func):
@@ -4579,6 +4590,11 @@ class JSONFormat(Func):
 # https://dev.mysql.com/doc/refman/8.0/en/json-search-functions.html#operator_member-of
 class JSONArrayContains(Binary, Predicate, Func):
     _sql_names = ["JSON_ARRAY_CONTAINS"]
+
+
+class ParseJSON(Func):
+    # BigQuery, Snowflake have PARSE_JSON, Presto has JSON_PARSE
+    _sql_names = ["PARSE_JSON", "JSON_PARSE"]
 
 
 class Least(Func):
@@ -5118,10 +5134,11 @@ def _apply_builder(
     prefix=None,
     into=None,
     dialect=None,
+    into_arg="this",
     **opts,
 ):
     if _is_wrong_expression(expression, into):
-        expression = into(this=expression)
+        expression = into(**{into_arg: expression})
     instance = maybe_copy(instance, copy)
     expression = maybe_parse(
         sql_or_expression=expression,

@@ -19,6 +19,7 @@ class TestMySQL(Validator):
             },
         )
 
+        self.validate_identity("CREATE TABLE foo (a BIGINT, UNIQUE (b) USING BTREE)")
         self.validate_identity("CREATE TABLE foo (id BIGINT)")
         self.validate_identity("CREATE TABLE 00f (1d BIGINT)")
         self.validate_identity("UPDATE items SET items.price = 0 WHERE items.id >= 5 LIMIT 10")
@@ -107,9 +108,8 @@ class TestMySQL(Validator):
         )
 
     def test_identity(self):
-        self.validate_identity(
-            "SELECT * FROM x ORDER BY BINARY a", "SELECT * FROM x ORDER BY CAST(a AS BINARY)"
-        )
+        self.validate_identity("UNLOCK TABLES")
+        self.validate_identity("LOCK TABLES `app_fields` WRITE")
         self.validate_identity("SELECT 1 XOR 0")
         self.validate_identity("SELECT 1 && 0", "SELECT 1 AND 0")
         self.validate_identity("SELECT /*+ BKA(t1) NO_BKA(t2) */ * FROM t1 INNER JOIN t2")
@@ -133,6 +133,9 @@ class TestMySQL(Validator):
         self.validate_identity("CREATE TABLE A LIKE B")
         self.validate_identity("SELECT * FROM t1, t2 FOR SHARE OF t1, t2 SKIP LOCKED")
         self.validate_identity("SELECT a || b", "SELECT a OR b")
+        self.validate_identity(
+            "SELECT * FROM x ORDER BY BINARY a", "SELECT * FROM x ORDER BY CAST(a AS BINARY)"
+        )
         self.validate_identity(
             """SELECT * FROM foo WHERE 3 MEMBER OF(JSON_EXTRACT(info, '$.value'))"""
         )
@@ -495,6 +498,21 @@ class TestMySQL(Validator):
         self.validate_identity("TIME_STR_TO_UNIX(x)", "UNIX_TIMESTAMP(x)")
 
     def test_mysql(self):
+        self.validate_all(
+            "a XOR b",
+            read={
+                "mysql": "a XOR b",
+                "snowflake": "BOOLXOR(a, b)",
+            },
+            write={
+                "duckdb": "(a AND (NOT b)) OR ((NOT a) AND b)",
+                "mysql": "a XOR b",
+                "postgres": "(a AND (NOT b)) OR ((NOT a) AND b)",
+                "snowflake": "BOOLXOR(a, b)",
+                "trino": "(a AND (NOT b)) OR ((NOT a) AND b)",
+            },
+        )
+
         self.validate_all(
             "SELECT * FROM test LIMIT 0 + 1, 0 + 1",
             write={
@@ -868,3 +886,17 @@ COMMENT='客户账户表'"""
 
     def test_json_object(self):
         self.validate_identity("SELECT JSON_OBJECT('id', 87, 'name', 'carrot')")
+
+    def test_is_null(self):
+        self.validate_all(
+            "SELECT ISNULL(x)", write={"": "SELECT (x IS NULL)", "mysql": "SELECT (x IS NULL)"}
+        )
+
+    def test_monthname(self):
+        self.validate_all(
+            "MONTHNAME(x)",
+            write={
+                "": "TIME_TO_STR(x, '%B')",
+                "mysql": "DATE_FORMAT(x, '%M')",
+            },
+        )

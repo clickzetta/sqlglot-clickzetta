@@ -358,6 +358,10 @@ class TestPresto(Validator):
             write={"presto": "CAST(x AS TIMESTAMP)"},
             read={"mysql": "CAST(x AS DATETIME)", "clickhouse": "CAST(x AS DATETIME64)"},
         )
+        self.validate_all(
+            "CAST(x AS TIMESTAMP)",
+            read={"mysql": "TIMESTAMP(x)"},
+        )
 
     def test_ddl(self):
         self.validate_all(
@@ -427,8 +431,8 @@ class TestPresto(Validator):
         self.validate_all(
             "SELECT fname, lname, age FROM person ORDER BY age DESC NULLS FIRST, fname ASC NULLS LAST, lname",
             write={
-                "presto": "SELECT fname, lname, age FROM person ORDER BY age DESC NULLS FIRST, fname, lname",
-                "spark": "SELECT fname, lname, age FROM person ORDER BY age DESC NULLS FIRST, fname NULLS LAST, lname NULLS LAST",
+                "presto": "SELECT fname, lname, age FROM person ORDER BY age DESC NULLS FIRST, fname ASC, lname",
+                "spark": "SELECT fname, lname, age FROM person ORDER BY age DESC NULLS FIRST, fname ASC NULLS LAST, lname NULLS LAST",
             },
         )
 
@@ -517,6 +521,14 @@ class TestPresto(Validator):
             "SELECT SPLIT_TO_MAP('a:1;b:2;a:3', ';', ':', (k, v1, v2) -> CONCAT(v1, v2))"
         )
 
+        self.validate_all(
+            """JSON '"foo"'""",
+            write={
+                "bigquery": """PARSE_JSON('"foo"')""",
+                "presto": """JSON_PARSE('"foo"')""",
+                "snowflake": """PARSE_JSON('"foo"')""",
+            },
+        )
         self.validate_all(
             "SELECT ROW(1, 2)",
             read={
@@ -824,9 +836,9 @@ class TestPresto(Validator):
         self.validate_all(
             """JSON_FORMAT(JSON '"x"')""",
             write={
-                "bigquery": """TO_JSON_STRING(JSON '"x"')""",
-                "duckdb": """CAST(TO_JSON(CAST('"x"' AS JSON)) AS TEXT)""",
-                "presto": """JSON_FORMAT(CAST('"x"' AS JSON))""",
+                "bigquery": """TO_JSON_STRING(PARSE_JSON('"x"'))""",
+                "duckdb": """CAST(TO_JSON(JSON('"x"')) AS TEXT)""",
+                "presto": """JSON_FORMAT(JSON_PARSE('"x"'))""",
                 "spark": """REGEXP_EXTRACT(TO_JSON(FROM_JSON('["x"]', SCHEMA_OF_JSON('["x"]'))), '^.(.*).$', 1)""",
             },
         )
@@ -916,14 +928,14 @@ class TestPresto(Validator):
             "SELECT CAST(JSON '[1,23,456]' AS ARRAY(INTEGER))",
             write={
                 "spark": "SELECT FROM_JSON('[1,23,456]', 'ARRAY<INT>')",
-                "presto": "SELECT CAST(CAST('[1,23,456]' AS JSON) AS ARRAY(INTEGER))",
+                "presto": "SELECT CAST(JSON_PARSE('[1,23,456]') AS ARRAY(INTEGER))",
             },
         )
         self.validate_all(
             """SELECT CAST(JSON '{"k1":1,"k2":23,"k3":456}' AS MAP(VARCHAR, INTEGER))""",
             write={
                 "spark": 'SELECT FROM_JSON(\'{"k1":1,"k2":23,"k3":456}\', \'MAP<STRING, INT>\')',
-                "presto": 'SELECT CAST(CAST(\'{"k1":1,"k2":23,"k3":456}\' AS JSON) AS MAP(VARCHAR, INTEGER))',
+                "presto": 'SELECT CAST(JSON_PARSE(\'{"k1":1,"k2":23,"k3":456}\') AS MAP(VARCHAR, INTEGER))',
             },
         )
 
@@ -933,44 +945,6 @@ class TestPresto(Validator):
                 "spark": "SELECT TO_JSON(ARRAY(1, 23, 456))",
                 "presto": "SELECT CAST(ARRAY[1, 23, 456] AS JSON)",
             },
-        )
-
-    def test_explode_to_unnest(self):
-        self.validate_all(
-            "SELECT col FROM tbl CROSS JOIN UNNEST(x) AS _u(col)",
-            read={"spark": "SELECT EXPLODE(x) FROM tbl"},
-        )
-        self.validate_all(
-            "SELECT col_2 FROM _u CROSS JOIN UNNEST(col) AS _u_2(col_2)",
-            read={"spark": "SELECT EXPLODE(col) FROM _u"},
-        )
-        self.validate_all(
-            "SELECT exploded FROM schema.tbl CROSS JOIN UNNEST(col) AS _u(exploded)",
-            read={"spark": "SELECT EXPLODE(col) AS exploded FROM schema.tbl"},
-        )
-        self.validate_all(
-            "SELECT col FROM UNNEST(SEQUENCE(1, 2)) AS _u(col)",
-            read={"spark": "SELECT EXPLODE(SEQUENCE(1, 2))"},
-        )
-        self.validate_all(
-            "SELECT col FROM tbl AS t CROSS JOIN UNNEST(t.c) AS _u(col)",
-            read={"spark": "SELECT EXPLODE(t.c) FROM tbl t"},
-        )
-        self.validate_all(
-            "SELECT pos, col FROM UNNEST(SEQUENCE(2, 3)) WITH ORDINALITY AS _u(col, pos)",
-            read={"spark": "SELECT POSEXPLODE(SEQUENCE(2, 3))"},
-        )
-        self.validate_all(
-            "SELECT pos, col FROM tbl CROSS JOIN UNNEST(SEQUENCE(2, 3)) WITH ORDINALITY AS _u(col, pos)",
-            read={"spark": "SELECT POSEXPLODE(SEQUENCE(2, 3)) FROM tbl"},
-        )
-        self.validate_all(
-            "SELECT pos, col FROM tbl AS t CROSS JOIN UNNEST(t.c) WITH ORDINALITY AS _u(col, pos)",
-            read={"spark": "SELECT POSEXPLODE(t.c) FROM tbl t"},
-        )
-        self.validate_all(
-            "SELECT col, pos, pos_2, col_2 FROM _u CROSS JOIN UNNEST(SEQUENCE(2, 3)) WITH ORDINALITY AS _u_2(col_2, pos_2)",
-            read={"spark": "SELECT col, pos, POSEXPLODE(SEQUENCE(2, 3)) FROM _u"},
         )
 
     def test_match_recognize(self):

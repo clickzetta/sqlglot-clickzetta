@@ -6,8 +6,10 @@ from sqlglot import exp, generator, parser, tokens, transforms
 from sqlglot.dialects.dialect import (
     Dialect,
     arrow_json_extract_scalar_sql,
+    date_add_interval_sql,
     datestrtodate_sql,
     format_time_lambda,
+    isnull_to_is_null,
     json_keyvalue_comma_sql,
     locate_to_strposition,
     max_or_greatest,
@@ -103,6 +105,7 @@ class MySQL(Dialect):
     TIME_FORMAT = "'%Y-%m-%d %T'"
     DPIPE_IS_STRING_CONCAT = False
     SUPPORTS_USER_DEFINED_TYPES = False
+    SUPPORTS_SEMI_ANTI_JOIN = False
 
     # https://prestodb.io/docs/current/functions/datetime.html#mysql-date-functions
     TIME_MAPPING = {
@@ -133,6 +136,7 @@ class MySQL(Dialect):
             "ENUM": TokenType.ENUM,
             "FORCE": TokenType.FORCE,
             "IGNORE": TokenType.IGNORE,
+            "LOCK TABLES": TokenType.COMMAND,
             "LONGBLOB": TokenType.LONGBLOB,
             "LONGTEXT": TokenType.LONGTEXT,
             "MEDIUMBLOB": TokenType.MEDIUMBLOB,
@@ -145,6 +149,7 @@ class MySQL(Dialect):
             "START": TokenType.BEGIN,
             "SIGNED": TokenType.BIGINT,
             "SIGNED INTEGER": TokenType.BIGINT,
+            "UNLOCK TABLES": TokenType.COMMAND,
             "UNSIGNED": TokenType.UBIGINT,
             "UNSIGNED INTEGER": TokenType.UBIGINT,
             "YEAR": TokenType.YEAR,
@@ -235,7 +240,12 @@ class MySQL(Dialect):
             "DATE_FORMAT": format_time_lambda(exp.TimeToStr, "mysql"),
             "DATE_SUB": parse_date_delta_with_interval(exp.DateSub),
             "INSTR": lambda args: exp.StrPosition(substr=seq_get(args, 1), this=seq_get(args, 0)),
+            "ISNULL": isnull_to_is_null,
             "LOCATE": locate_to_strposition,
+            "MONTHNAME": lambda args: exp.TimeToStr(
+                this=seq_get(args, 0),
+                format=exp.Literal.string("%B"),
+            ),
             "STR_TO_DATE": _str_to_date,
         }
 
@@ -377,7 +387,7 @@ class MySQL(Dialect):
                 self._match_texts({"INDEX", "KEY"})
 
             this = self._parse_id_var(any_token=False)
-            type_ = self._match(TokenType.USING) and self._advance_any() and self._prev.text
+            index_type = self._match(TokenType.USING) and self._advance_any() and self._prev.text
             schema = self._parse_schema()
 
             options = []
@@ -417,7 +427,7 @@ class MySQL(Dialect):
                 this=this,
                 schema=schema,
                 kind=kind,
-                type=type_,
+                index_type=index_type,
                 options=options,
             )
 
@@ -555,12 +565,16 @@ class MySQL(Dialect):
             exp.NullSafeEQ: lambda self, e: self.binary(e, "<=>"),
             exp.NullSafeNEQ: lambda self, e: self.not_sql(self.binary(e, "<=>")),
             exp.Pivot: no_pivot_sql,
-            exp.Select: transforms.preprocess([transforms.eliminate_distinct_on]),
+            exp.Select: transforms.preprocess(
+                [transforms.eliminate_distinct_on, transforms.eliminate_semi_and_anti_joins]
+            ),
             exp.StrPosition: strposition_to_locate_sql,
             exp.StrToDate: _str_to_date_sql,
             exp.StrToTime: _str_to_date_sql,
             exp.Stuff: rename_func("INSERT"),
             exp.TableSample: no_tablesample_sql,
+            exp.TimestampAdd: date_add_interval_sql("DATE", "ADD"),
+            exp.TimestampSub: date_add_interval_sql("DATE", "SUB"),
             exp.TimeStrToUnix: rename_func("UNIX_TIMESTAMP"),
             exp.TimeStrToTime: lambda self, e: self.sql(exp.cast(e.this, "datetime", copy=True)),
             exp.TimeToStr: lambda self, e: self.func("DATE_FORMAT", e.this, self.format_time(e)),
