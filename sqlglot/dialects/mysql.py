@@ -330,6 +330,8 @@ class MySQL(Dialect):
                 exp.Anonymous, this="VALUES", expressions=[self._parse_id_var()]
             ),
             "AES_DECRYPT": _parse_aes_decrypt,
+            "CURTIME": lambda self: self.expression(exp.CurrentTime),
+            "CURDATE": lambda self: self.expression(exp.CurrentDate),
         }
 
         STATEMENT_PARSERS = {
