@@ -70,7 +70,8 @@ class ClickZetta(Spark):
             exp.CharacterSetColumnConstraint: lambda self, e: '',
             exp.Create: transforms.preprocess([_transform_create]),
             exp.GroupConcat: _groupconcat_to_wmconcat,
-            exp.AesDecrypt: rename_func("AES_DECRYPT_MYSQL")
+            exp.AesDecrypt: rename_func("AES_DECRYPT_MYSQL"),
+            exp.CurrentTime: lambda self, e: "DATE_FORMAT(NOW(),'HH:mm:ss')",
         }
 
         def datatype_sql(self, expression: exp.DataType) -> str:
