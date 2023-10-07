@@ -1,6 +1,7 @@
 from unittest import mock
 
 from sqlglot import UnsupportedError, exp, parse_one
+from sqlglot.optimizer.normalize_identifiers import normalize_identifiers
 from tests.dialects.test_dialect import Validator
 
 
@@ -8,10 +9,67 @@ class TestSnowflake(Validator):
     dialect = "snowflake"
 
     def test_snowflake(self):
+        self.validate_identity("LISTAGG(data['some_field'], ',')")
+        self.validate_identity("WEEKOFYEAR(tstamp)")
+        self.validate_identity("SELECT SUM(amount) FROM mytable GROUP BY ALL")
+        self.validate_identity("WITH x AS (SELECT 1 AS foo) SELECT foo FROM IDENTIFIER('x')")
+        self.validate_identity("WITH x AS (SELECT 1 AS foo) SELECT IDENTIFIER('foo') FROM x")
+        self.validate_identity("INITCAP('iqamqinterestedqinqthisqtopic', 'q')")
+        self.validate_identity("CAST(x AS GEOMETRY)")
+        self.validate_identity("OBJECT_CONSTRUCT(*)")
+        self.validate_identity("SELECT TO_DATE('2019-02-28') + INTERVAL '1 day, 1 year'")
+        self.validate_identity("SELECT CAST('2021-01-01' AS DATE) + INTERVAL '1 DAY'")
+        self.validate_identity("SELECT HLL(*)")
+        self.validate_identity("SELECT HLL(a)")
+        self.validate_identity("SELECT HLL(DISTINCT t.a)")
+        self.validate_identity("SELECT HLL(a, b, c)")
+        self.validate_identity("SELECT HLL(DISTINCT a, b, c)")
+        self.validate_identity("$x")  # parameter
+        self.validate_identity("a$b")  # valid snowflake identifier
+        self.validate_identity("SELECT REGEXP_LIKE(a, b, c)")
+        self.validate_identity("CREATE TABLE foo (bar FLOAT AUTOINCREMENT START 0 INCREMENT 1)")
+        self.validate_identity("ALTER TABLE IF EXISTS foo SET TAG a = 'a', b = 'b', c = 'c'")
+        self.validate_identity("ALTER TABLE foo UNSET TAG a, b, c")
+        self.validate_identity("ALTER TABLE foo SET COMMENT = 'bar'")
+        self.validate_identity("ALTER TABLE foo SET CHANGE_TRACKING = FALSE")
+        self.validate_identity("ALTER TABLE foo UNSET DATA_RETENTION_TIME_IN_DAYS, CHANGE_TRACKING")
+        self.validate_identity("COMMENT IF EXISTS ON TABLE foo IS 'bar'")
+        self.validate_identity("SELECT CONVERT_TIMEZONE('UTC', 'America/Los_Angeles', col)")
+        self.validate_identity("REGEXP_REPLACE('target', 'pattern', '\n')")
         self.validate_identity(
             'DESCRIBE TABLE "SNOWFLAKE_SAMPLE_DATA"."TPCDS_SF100TCL"."WEB_SITE" type=stage'
         )
+        self.validate_identity(
+            "SELECT state, city, SUM(retail_price * quantity) AS gross_revenue FROM sales GROUP BY ALL"
+        )
+        self.validate_identity(
+            "SELECT * FROM foo window",
+            "SELECT * FROM foo AS window",
+        )
+        self.validate_identity(
+            r"SELECT RLIKE(a, $$regular expression with \ characters: \d{2}-\d{3}-\d{4}$$, 'i') FROM log_source",
+            r"SELECT REGEXP_LIKE(a, 'regular expression with \\ characters: \\d{2}-\\d{3}-\\d{4}', 'i') FROM log_source",
+        )
+        self.validate_identity(
+            r"SELECT $$a ' \ \t \x21 z $ $$",
+            r"SELECT 'a \' \\ \\t \\x21 z $ '",
+        )
+        self.validate_identity(
+            "SELECT {'test': 'best'}::VARIANT",
+            "SELECT CAST(OBJECT_CONSTRUCT('test', 'best') AS VARIANT)",
+        )
 
+        self.validate_all("CAST(x AS BYTEINT)", write={"snowflake": "CAST(x AS INT)"})
+        self.validate_all("CAST(x AS CHAR VARYING)", write={"snowflake": "CAST(x AS VARCHAR)"})
+        self.validate_all("CAST(x AS CHARACTER VARYING)", write={"snowflake": "CAST(x AS VARCHAR)"})
+        self.validate_all("CAST(x AS NCHAR VARYING)", write={"snowflake": "CAST(x AS VARCHAR)"})
+        self.validate_all(
+            "SELECT COLLATE('B', 'und:ci')",
+            write={
+                "bigquery": "SELECT COLLATE('B', 'und:ci')",
+                "snowflake": "SELECT COLLATE('B', 'und:ci')",
+            },
+        )
         self.validate_all(
             "SELECT * FROM x START WITH a = b CONNECT BY c = PRIOR d",
             read={
@@ -35,58 +93,6 @@ class TestSnowflake(Validator):
                 "tsql": "SELECT STUFF(a, 0, 0, 'b')",
             },
         )
-
-        self.validate_identity("LISTAGG(data['some_field'], ',')")
-        self.validate_identity("WEEKOFYEAR(tstamp)")
-        self.validate_identity("SELECT SUM(amount) FROM mytable GROUP BY ALL")
-        self.validate_identity("WITH x AS (SELECT 1 AS foo) SELECT foo FROM IDENTIFIER('x')")
-        self.validate_identity("WITH x AS (SELECT 1 AS foo) SELECT IDENTIFIER('foo') FROM x")
-        self.validate_identity("INITCAP('iqamqinterestedqinqthisqtopic', 'q')")
-        self.validate_identity("CAST(x AS GEOMETRY)")
-        self.validate_identity("OBJECT_CONSTRUCT(*)")
-        self.validate_identity("SELECT TO_DATE('2019-02-28') + INTERVAL '1 day, 1 year'")
-        self.validate_identity("SELECT CAST('2021-01-01' AS DATE) + INTERVAL '1 DAY'")
-        self.validate_identity("SELECT HLL(*)")
-        self.validate_identity("SELECT HLL(a)")
-        self.validate_identity("SELECT HLL(DISTINCT t.a)")
-        self.validate_identity("SELECT HLL(a, b, c)")
-        self.validate_identity("SELECT HLL(DISTINCT a, b, c)")
-        self.validate_identity("$x")  # parameter
-        self.validate_identity("a$b")  # valid snowflake identifier
-        self.validate_identity("SELECT REGEXP_LIKE(a, b, c)")
-        self.validate_identity("PUT file:///dir/tmp.csv @%table")
-        self.validate_identity("CREATE TABLE foo (bar FLOAT AUTOINCREMENT START 0 INCREMENT 1)")
-        self.validate_identity("ALTER TABLE IF EXISTS foo SET TAG a = 'a', b = 'b', c = 'c'")
-        self.validate_identity("ALTER TABLE foo UNSET TAG a, b, c")
-        self.validate_identity("ALTER TABLE foo SET COMMENT = 'bar'")
-        self.validate_identity("ALTER TABLE foo SET CHANGE_TRACKING = FALSE")
-        self.validate_identity("ALTER TABLE foo UNSET DATA_RETENTION_TIME_IN_DAYS, CHANGE_TRACKING")
-        self.validate_identity("COMMENT IF EXISTS ON TABLE foo IS 'bar'")
-        self.validate_identity("SELECT CONVERT_TIMEZONE('UTC', 'America/Los_Angeles', col)")
-        self.validate_identity("REGEXP_REPLACE('target', 'pattern', '\n')")
-        self.validate_identity(
-            'COPY INTO NEW_TABLE ("foo", "bar") FROM (SELECT $1, $2, $3, $4 FROM @%old_table)'
-        )
-        self.validate_identity(
-            "SELECT state, city, SUM(retail_price * quantity) AS gross_revenue FROM sales GROUP BY ALL"
-        )
-        self.validate_identity(
-            r"SELECT RLIKE(a, $$regular expression with \ characters: \d{2}-\d{3}-\d{4}$$, 'i') FROM log_source",
-            r"SELECT REGEXP_LIKE(a, 'regular expression with \\ characters: \\d{2}-\\d{3}-\\d{4}', 'i') FROM log_source",
-        )
-        self.validate_identity(
-            r"SELECT $$a ' \ \t \x21 z $ $$",
-            r"SELECT 'a \' \\ \\t \\x21 z $ '",
-        )
-        self.validate_identity(
-            "SELECT {'test': 'best'}::VARIANT",
-            "SELECT CAST(OBJECT_CONSTRUCT('test', 'best') AS VARIANT)",
-        )
-
-        self.validate_all("CAST(x AS BYTEINT)", write={"snowflake": "CAST(x AS INT)"})
-        self.validate_all("CAST(x AS CHAR VARYING)", write={"snowflake": "CAST(x AS VARCHAR)"})
-        self.validate_all("CAST(x AS CHARACTER VARYING)", write={"snowflake": "CAST(x AS VARCHAR)"})
-        self.validate_all("CAST(x AS NCHAR VARYING)", write={"snowflake": "CAST(x AS VARCHAR)"})
         self.validate_all(
             "ARRAY_GENERATE_RANGE(0, 3)",
             write={
@@ -279,13 +285,13 @@ class TestSnowflake(Validator):
         self.validate_all(
             "SELECT * EXCLUDE a, b FROM xxx",
             write={
-                "snowflake": "SELECT * EXCLUDE (a, b) FROM xxx",
+                "snowflake": "SELECT * EXCLUDE (a), b FROM xxx",
             },
         )
         self.validate_all(
             "SELECT * RENAME a AS b, c AS d FROM xxx",
             write={
-                "snowflake": "SELECT * RENAME (a AS b, c AS d) FROM xxx",
+                "snowflake": "SELECT * RENAME (a AS b), c AS d FROM xxx",
             },
         )
         self.validate_all(
@@ -513,6 +519,40 @@ class TestSnowflake(Validator):
             },
         )
 
+    def test_staged_files(self):
+        # Ensure we don't treat staged file paths as identifiers (i.e. they're not normalized)
+        staged_file = parse_one("SELECT * FROM @foo", read="snowflake")
+        self.assertEqual(
+            normalize_identifiers(staged_file, dialect="snowflake").sql(dialect="snowflake"),
+            staged_file.sql(dialect="snowflake"),
+        )
+
+        self.validate_identity("SELECT * FROM @~")
+        self.validate_identity("SELECT * FROM @~/some/path/to/file.csv")
+        self.validate_identity("SELECT * FROM @mystage")
+        self.validate_identity("SELECT * FROM '@mystage'")
+        self.validate_identity("SELECT * FROM @namespace.mystage/path/to/file.json.gz")
+        self.validate_identity("SELECT * FROM @namespace.%table_name/path/to/file.json.gz")
+        self.validate_identity("SELECT * FROM '@external/location' (FILE_FORMAT => 'path.to.csv')")
+        self.validate_identity("PUT file:///dir/tmp.csv @%table")
+        self.validate_identity(
+            'COPY INTO NEW_TABLE ("foo", "bar") FROM (SELECT $1, $2, $3, $4 FROM @%old_table)'
+        )
+        self.validate_identity(
+            "SELECT * FROM @foo/bar (FILE_FORMAT => ds_sandbox.test.my_csv_format, PATTERN => 'test') AS bla"
+        )
+        self.validate_identity(
+            "SELECT t.$1, t.$2 FROM @mystage1 (FILE_FORMAT => 'myformat', PATTERN => '.*data.*[.]csv.gz') AS t"
+        )
+        self.validate_identity(
+            "SELECT parse_json($1):a.b FROM @mystage2/data1.json.gz",
+            "SELECT PARSE_JSON($1)['a'].b FROM @mystage2/data1.json.gz",
+        )
+        self.validate_identity(
+            "SELECT * FROM @mystage t (c1)",
+            "SELECT * FROM @mystage AS t(c1)",
+        )
+
     def test_sample(self):
         self.validate_identity("SELECT * FROM testtable TABLESAMPLE BERNOULLI (20.3)")
         self.validate_identity("SELECT * FROM testtable TABLESAMPLE (100)")
@@ -660,7 +700,6 @@ class TestSnowflake(Validator):
         self.validate_identity("CREATE MATERIALIZED VIEW a COMMENT='...' AS SELECT 1 FROM x")
         self.validate_identity("CREATE DATABASE mytestdb_clone CLONE mytestdb")
         self.validate_identity("CREATE SCHEMA mytestschema_clone CLONE testschema")
-        self.validate_identity("CREATE TABLE orders_clone CLONE orders")
         self.validate_identity("CREATE TABLE IDENTIFIER('foo') (COLUMN1 VARCHAR, COLUMN2 VARCHAR)")
         self.validate_identity("CREATE TABLE IDENTIFIER($foo) (col1 VARCHAR, col2 VARCHAR)")
         self.validate_identity(
@@ -679,6 +718,16 @@ class TestSnowflake(Validator):
             "CREATE OR REPLACE TABLE EXAMPLE_DB.DEMO.USERS (ID DECIMAL(38, 0) NOT NULL, PRIMARY KEY (ID), FOREIGN KEY (CITY_CODE) REFERENCES EXAMPLE_DB.DEMO.CITIES (CITY_CODE))"
         )
 
+        self.validate_all(
+            "CREATE TABLE orders_clone CLONE orders",
+            read={
+                "bigquery": "CREATE TABLE orders_clone CLONE orders",
+            },
+            write={
+                "bigquery": "CREATE TABLE orders_clone CLONE orders",
+                "snowflake": "CREATE TABLE orders_clone CLONE orders",
+            },
+        )
         self.validate_all(
             "CREATE OR REPLACE TRANSIENT TABLE a (id INT)",
             read={
@@ -888,7 +937,7 @@ FROM persons AS p, LATERAL FLATTEN(input => p.c, path => 'contact') AS f, LATERA
             """SELECT $1 AS "_1" FROM VALUES ('a'), ('b')""",
             write={
                 "snowflake": """SELECT $1 AS "_1" FROM (VALUES ('a'), ('b'))""",
-                "spark": """SELECT @1 AS `_1` FROM VALUES ('a'), ('b')""",
+                "spark": """SELECT ${1} AS `_1` FROM VALUES ('a'), ('b')""",
             },
         )
 

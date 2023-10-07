@@ -156,9 +156,7 @@ SELECT * FROM foo
 -- comment 2
 -- comment 3
 SELECT * FROM foo""",
-            """/* comment 1 */
-/* comment 2 */
-/* comment 3 */
+            """/* comment 1 */ /* comment 2 */ /* comment 3 */
 SELECT
   *
 FROM foo""",
@@ -182,8 +180,7 @@ line3*/ /*another comment*/ where 1=1 -- comment at the end""",
   *
 FROM tbl /* line1
 line2
-line3 */
-/* another comment */
+line3 */ /* another comment */
 WHERE
   1 = 1 /* comment at the end */""",
             pretty=True,
@@ -310,9 +307,7 @@ FROM v""",
             -- comment3
             DROP TABLE IF EXISTS db.tba
             """,
-            """/* comment1 */
-/* comment2 */
-/* comment3 */
+            """/* comment1 */ /* comment2 */ /* comment3 */
 DROP TABLE IF EXISTS db.tba""",
             pretty=True,
         )
@@ -337,9 +332,7 @@ SELECT
   c
 FROM tb_01
 WHERE
-  a /* comment5 */ = 1 AND b = 2 /* comment6 */
-  /* and c = 1 */
-  /* comment7 */""",
+  a /* comment5 */ = 1 AND b = 2 /* comment6 */ /* and c = 1 */ /* comment7 */""",
             pretty=True,
         )
         self.validate(
@@ -375,9 +368,15 @@ INNER JOIN b""",
             """SELECT
   *
 FROM a
-/* comment 1 */
-/* comment 2 */
+/* comment 1 */ /* comment 2 */
 LEFT OUTER JOIN b""",
+            pretty=True,
+        )
+        self.validate(
+            "SELECT\n  a /* sqlglot.meta case_sensitive */ -- noqa\nFROM tbl",
+            """SELECT
+  a /* sqlglot.meta case_sensitive */ /* noqa */
+FROM tbl""",
             pretty=True,
         )
 
@@ -468,12 +467,12 @@ LEFT OUTER JOIN b""",
             "ALTER TABLE integers ADD COLUMN k INT",
         )
         self.validate(
-            "ALTER TABLE integers ALTER i SET DATA TYPE VARCHAR",
-            "ALTER TABLE integers ALTER COLUMN i TYPE VARCHAR",
+            "ALTER TABLE integers ALTER i TYPE VARCHAR",
+            "ALTER TABLE integers ALTER COLUMN i SET DATA TYPE VARCHAR",
         )
         self.validate(
             "ALTER TABLE integers ALTER i TYPE VARCHAR COLLATE foo USING bar",
-            "ALTER TABLE integers ALTER COLUMN i TYPE VARCHAR COLLATE foo USING bar",
+            "ALTER TABLE integers ALTER COLUMN i SET DATA TYPE VARCHAR COLLATE foo USING bar",
         )
 
     def test_time(self):
@@ -604,7 +603,7 @@ LEFT OUTER JOIN b""",
         self.validate(
             "CREATE TEMPORARY TABLE test AS SELECT 1",
             "CREATE TEMPORARY VIEW test AS SELECT 1",
-            write="spark",
+            write="spark2",
         )
 
     @mock.patch("sqlglot.helper.logger")

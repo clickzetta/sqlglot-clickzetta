@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import typing as t
 
-from sqlglot import exp, generator, parser, tokens
+from sqlglot import exp, generator, parser, tokens, transforms
 from sqlglot.dialects.dialect import (
     Dialect,
     inline_array_sql,
@@ -21,11 +21,25 @@ def _lower_func(sql: str) -> str:
     return sql[:index].lower() + sql[index:]
 
 
+def _quantile_sql(self, e):
+    quantile = e.args["quantile"]
+    args = f"({self.sql(e, 'this')})"
+    if isinstance(quantile, exp.Array):
+        func = self.func("quantiles", *quantile)
+    else:
+        func = self.func("quantile", quantile)
+    return func + args
+
+
 class ClickHouse(Dialect):
     NORMALIZE_FUNCTIONS: bool | str = False
     NULL_ORDERING = "nulls_are_last"
     STRICT_STRING_CONCAT = True
     SUPPORTS_USER_DEFINED_TYPES = False
+
+    ESCAPE_SEQUENCES = {
+        "\\0": "\0",
+    }
 
     class Tokenizer(tokens.Tokenizer):
         COMMENTS = ["--", "#", "#!", ("/*", "*/")]
@@ -33,6 +47,7 @@ class ClickHouse(Dialect):
         STRING_ESCAPES = ["'", "\\"]
         BIT_STRINGS = [("0b", "")]
         HEX_STRINGS = [("0x", ""), ("0X", "")]
+        HEREDOC_STRINGS = ["$"]
 
         KEYWORDS = {
             **tokens.Tokenizer.KEYWORDS,
@@ -55,6 +70,7 @@ class ClickHouse(Dialect):
             "LOWCARDINALITY": TokenType.LOWCARDINALITY,
             "MAP": TokenType.MAP,
             "NESTED": TokenType.NESTED,
+            "SAMPLE": TokenType.TABLE_SAMPLE,
             "TUPLE": TokenType.STRUCT,
             "UINT128": TokenType.UINT128,
             "UINT16": TokenType.USMALLINT,
@@ -62,6 +78,11 @@ class ClickHouse(Dialect):
             "UINT32": TokenType.UINT,
             "UINT64": TokenType.UBIGINT,
             "UINT8": TokenType.UTINYINT,
+        }
+
+        SINGLE_TOKENS = {
+            **tokens.Tokenizer.SINGLE_TOKENS,
+            "$": TokenType.HEREDOC_STRING,
         }
 
     class Parser(parser.Parser):
@@ -301,6 +322,7 @@ class ClickHouse(Dialect):
         QUERY_HINTS = False
         STRUCT_DELIMITER = ("(", ")")
         NVL2_SUPPORTED = False
+        TABLESAMPLE_REQUIRES_PARENS = False
 
         STRING_TYPE_MAPPING = {
             exp.DataType.Type.CHAR: "String",
@@ -348,6 +370,7 @@ class ClickHouse(Dialect):
 
         TRANSFORMS = {
             **generator.Generator.TRANSFORMS,
+            exp.Select: transforms.preprocess([transforms.eliminate_qualify]),
             exp.AnyValue: rename_func("any"),
             exp.ApproxDistinct: rename_func("uniq"),
             exp.Array: inline_array_sql,
@@ -359,12 +382,13 @@ class ClickHouse(Dialect):
                 "DATE_DIFF", exp.Literal.string(e.text("unit") or "day"), e.expression, e.this
             ),
             exp.Final: lambda self, e: f"{self.sql(e, 'this')} FINAL",
+            exp.IsNan: rename_func("isNaN"),
             exp.Map: lambda self, e: _lower_func(var_map_sql(self, e)),
             exp.PartitionedByProperty: lambda self, e: f"PARTITION BY {self.sql(e, 'this')}",
             exp.Pivot: no_pivot_sql,
-            exp.Quantile: lambda self, e: self.func("quantile", e.args.get("quantile"))
-            + f"({self.sql(e, 'this')})",
+            exp.Quantile: _quantile_sql,
             exp.RegexpLike: lambda self, e: f"match({self.format_args(e.this, e.expression)})",
+            exp.StartsWith: rename_func("startsWith"),
             exp.StrPosition: lambda self, e: f"position({self.format_args(e.this, e.args.get('substr'), e.args.get('position'))})",
             exp.VarMap: lambda self, e: _lower_func(var_map_sql(self, e)),
             exp.Xor: lambda self, e: self.func("xor", e.this, e.expression, *e.expressions),

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import typing as t
 
-from sqlglot import exp
+from sqlglot import exp, parse_one
 from sqlglot._typing import E
 from sqlglot.dialects.dialect import Dialect, DialectType
 
@@ -21,6 +21,13 @@ def normalize_identifiers(expression, dialect=None):
     """
     Normalize all unquoted identifiers to either lower or upper case, depending
     on the dialect. This essentially makes those identifiers case-insensitive.
+
+    It's possible to make this a no-op by adding a special comment next to the
+    identifier of interest:
+
+        SELECT a /* sqlglot.meta case_sensitive */ FROM table
+
+    In this example, the identifier `a` will not be normalized.
 
     Note:
         Some dialects (e.g. BigQuery) treat identifiers as case-insensitive even
@@ -42,5 +49,14 @@ def normalize_identifiers(expression, dialect=None):
         The transformed expression.
     """
     if isinstance(expression, str):
-        expression = exp.to_identifier(expression)
-    return expression.transform(Dialect.get_or_raise(dialect).normalize_identifier, copy=False)
+        expression = parse_one(expression, dialect=dialect, into=exp.Identifier)
+
+    dialect = Dialect.get_or_raise(dialect)
+
+    def _normalize(node: E) -> E:
+        if not node.meta.get("case_sensitive"):
+            exp.replace_children(node, _normalize)
+            node = dialect.normalize_identifier(node)
+        return node
+
+    return _normalize(expression)

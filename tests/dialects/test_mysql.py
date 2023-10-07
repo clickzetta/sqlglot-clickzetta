@@ -12,6 +12,8 @@ class TestMySQL(Validator):
             self.validate_identity(f"CREATE TABLE t (id {t} UNSIGNED)")
             self.validate_identity(f"CREATE TABLE t (id {t}(10) UNSIGNED)")
 
+        self.validate_identity("CREATE TABLE t (id DECIMAL(20, 4) UNSIGNED)")
+
         self.validate_all(
             "CREATE TABLE t (id INT UNSIGNED)",
             write={
@@ -27,6 +29,9 @@ class TestMySQL(Validator):
         self.validate_identity("CREATE TABLE foo (a BIGINT, INDEX USING BTREE (b))")
         self.validate_identity("CREATE TABLE foo (a BIGINT, FULLTEXT INDEX (b))")
         self.validate_identity("CREATE TABLE foo (a BIGINT, SPATIAL INDEX (b))")
+        self.validate_identity(
+            "CREATE TABLE `oauth_consumer` (`key` VARCHAR(32) NOT NULL, UNIQUE `OAUTH_CONSUMER_KEY` (`key`))"
+        )
         self.validate_identity(
             "CREATE TABLE `x` (`username` VARCHAR(200), PRIMARY KEY (`username`(16)))"
         )
@@ -205,6 +210,9 @@ class TestMySQL(Validator):
         )
         self.validate_identity("INTERVAL '1' YEAR")
         self.validate_identity("DATE_ADD(x, INTERVAL 1 YEAR)")
+        self.validate_identity("CHAR(0)")
+        self.validate_identity("CHAR(77, 121, 83, 81, '76')")
+        self.validate_identity("CHAR(77, 77.3, '77.3' USING utf8mb4)")
 
     def test_types(self):
         self.validate_identity("CAST(x AS MEDIUMINT) + CAST(y AS YEAR(4))")
@@ -243,6 +251,13 @@ class TestMySQL(Validator):
         self.validate_identity("SELECT DAY_OF_YEAR('2023-01-01')", "SELECT DAYOFYEAR('2023-01-01')")
         self.validate_identity(
             "SELECT WEEK_OF_YEAR('2023-01-01')", "SELECT WEEKOFYEAR('2023-01-01')"
+        )
+        self.validate_all(
+            "CHAR(10)",
+            write={
+                "mysql": "CHAR(10)",
+                "presto": "CHR(10)",
+            },
         )
 
     def test_escape(self):
@@ -496,6 +511,56 @@ class TestMySQL(Validator):
         self.validate_identity("FROM_UNIXTIME(a, b)")
         self.validate_identity("FROM_UNIXTIME(a, b, c)")
         self.validate_identity("TIME_STR_TO_UNIX(x)", "UNIX_TIMESTAMP(x)")
+        self.validate_all(
+            "SELECT TO_DAYS(x)",
+            write={
+                "mysql": "SELECT (DATEDIFF(x, '0000-01-01') + 1)",
+                "presto": "SELECT (DATE_DIFF('DAY', CAST(CAST('0000-01-01' AS TIMESTAMP) AS DATE), CAST(CAST(x AS TIMESTAMP) AS DATE)) + 1)",
+            },
+        )
+        self.validate_all(
+            "SELECT DATEDIFF(x, y)",
+            write={"mysql": "SELECT DATEDIFF(x, y)", "presto": "SELECT DATE_DIFF('day', y, x)"},
+        )
+        self.validate_all(
+            "DAYOFYEAR(x)",
+            write={
+                "mysql": "DAYOFYEAR(x)",
+                "": "DAY_OF_YEAR(TS_OR_DS_TO_DATE(x))",
+            },
+        )
+        self.validate_all(
+            "DAYOFMONTH(x)",
+            write={"mysql": "DAYOFMONTH(x)", "": "DAY_OF_MONTH(TS_OR_DS_TO_DATE(x))"},
+        )
+        self.validate_all(
+            "DAYOFWEEK(x)",
+            write={"mysql": "DAYOFWEEK(x)", "": "DAY_OF_WEEK(TS_OR_DS_TO_DATE(x))"},
+        )
+        self.validate_all(
+            "WEEKOFYEAR(x)",
+            write={"mysql": "WEEKOFYEAR(x)", "": "WEEK_OF_YEAR(TS_OR_DS_TO_DATE(x))"},
+        )
+        self.validate_all(
+            "DAY(x)",
+            write={"mysql": "DAY(x)", "": "DAY(TS_OR_DS_TO_DATE(x))"},
+        )
+        self.validate_all(
+            "WEEK(x)",
+            write={"mysql": "WEEK(x)", "": "WEEK(TS_OR_DS_TO_DATE(x))"},
+        )
+        self.validate_all(
+            "YEAR(x)",
+            write={"mysql": "YEAR(x)", "": "YEAR(TS_OR_DS_TO_DATE(x))"},
+        )
+        self.validate_all(
+            "DATE(x)",
+            read={"": "TS_OR_DS_TO_DATE(x)"},
+        )
+        self.validate_all(
+            "STR_TO_DATE(x, '%M')",
+            read={"": "TS_OR_DS_TO_DATE(x, '%B')"},
+        )
 
     def test_mysql(self):
         self.validate_all(
@@ -896,7 +961,7 @@ COMMENT='客户账户表'"""
         self.validate_all(
             "MONTHNAME(x)",
             write={
-                "": "TIME_TO_STR(x, '%B')",
+                "": "TIME_TO_STR(TS_OR_DS_TO_DATE(x), '%B')",
                 "mysql": "DATE_FORMAT(x, '%M')",
             },
         )

@@ -153,6 +153,7 @@ class Oracle(Dialect):
         JOIN_HINTS = False
         TABLE_HINTS = False
         COLUMN_JOIN_MARKS_SUPPORTED = True
+        DATA_TYPE_SPECIFIERS_ALLOWED = True
 
         LIMIT_FETCH = "FETCH"
 
@@ -179,7 +180,12 @@ class Oracle(Dialect):
             ),
             exp.Group: transforms.preprocess([transforms.unalias_group]),
             exp.ILike: no_ilike_sql,
-            exp.Select: transforms.preprocess([transforms.eliminate_distinct_on]),
+            exp.Select: transforms.preprocess(
+                [
+                    transforms.eliminate_distinct_on,
+                    transforms.eliminate_qualify,
+                ]
+            ),
             exp.StrToTime: lambda self, e: f"TO_TIMESTAMP({self.sql(e, 'this')}, {self.format_time(e)})",
             exp.Subquery: lambda self, e: self.subquery_sql(e, sep=" "),
             exp.Substring: rename_func("SUBSTR"),

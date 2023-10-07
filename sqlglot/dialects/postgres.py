@@ -22,6 +22,7 @@ from sqlglot.dialects.dialect import (
     rename_func,
     simplify_literal,
     str_position_sql,
+    struct_extract_sql,
     timestamptrunc_sql,
     timestrtotime_sql,
     trim_sql,
@@ -111,7 +112,7 @@ def _string_agg_sql(self: Postgres.Generator, expression: exp.GroupConcat) -> st
 
 def _datatype_sql(self: Postgres.Generator, expression: exp.DataType) -> str:
     if expression.is_type("array"):
-        return f"{self.expressions(expression, flat=True)}[]"
+        return f"{self.expressions(expression, flat=True)}[]" if expression.expressions else "ARRAY"
     return self.datatype_sql(expression)
 
 
@@ -204,7 +205,7 @@ def _remove_target_from_merge(expression: exp.Expression) -> exp.Expression:
 
         for when in expression.expressions:
             when.transform(
-                lambda node: exp.column(node.name)
+                lambda node: exp.column(node.this)
                 if isinstance(node, exp.Column) and normalize(node.args.get("table")) in targets
                 else node,
                 copy=False,
@@ -248,11 +249,10 @@ class Postgres(Dialect):
     }
 
     class Tokenizer(tokens.Tokenizer):
-        QUOTES = ["'", "$$"]
-
         BIT_STRINGS = [("b'", "'"), ("B'", "'")]
         HEX_STRINGS = [("x'", "'"), ("X'", "'")]
         BYTE_STRINGS = [("e'", "'"), ("E'", "'")]
+        HEREDOC_STRINGS = ["$"]
 
         KEYWORDS = {
             **tokens.Tokenizer.KEYWORDS,
@@ -296,7 +296,7 @@ class Postgres(Dialect):
 
         SINGLE_TOKENS = {
             **tokens.Tokenizer.SINGLE_TOKENS,
-            "$": TokenType.PARAMETER,
+            "$": TokenType.HEREDOC_STRING,
         }
 
         VAR_SINGLE_TOKENS = {"$"}
@@ -420,9 +420,15 @@ class Postgres(Dialect):
             exp.Pow: lambda self, e: self.binary(e, "^"),
             exp.RegexpLike: lambda self, e: self.binary(e, "~"),
             exp.RegexpILike: lambda self, e: self.binary(e, "~*"),
-            exp.Select: transforms.preprocess([transforms.eliminate_semi_and_anti_joins]),
+            exp.Select: transforms.preprocess(
+                [
+                    transforms.eliminate_semi_and_anti_joins,
+                    transforms.eliminate_qualify,
+                ]
+            ),
             exp.StrPosition: str_position_sql,
             exp.StrToTime: lambda self, e: f"TO_TIMESTAMP({self.sql(e, 'this')}, {self.format_time(e)})",
+            exp.StructExtract: struct_extract_sql,
             exp.Substring: _substring_sql,
             exp.TimestampTrunc: timestamptrunc_sql,
             exp.TimeStrToTime: timestrtotime_sql,
@@ -433,6 +439,8 @@ class Postgres(Dialect):
             exp.TryCast: no_trycast_sql,
             exp.TsOrDsToDate: ts_or_ds_to_date_sql("postgres"),
             exp.UnixToTime: lambda self, e: f"TO_TIMESTAMP({self.sql(e, 'this')})",
+            exp.VariancePop: rename_func("VAR_POP"),
+            exp.Variance: rename_func("VAR_SAMP"),
             exp.Xor: bool_xor_sql,
         }
 

@@ -10,9 +10,11 @@ from sqlglot.dialects.dialect import (
     any_value_to_max_sql,
     max_or_greatest,
     min_or_least,
+    move_insert_cte_sql,
     parse_date_delta,
     rename_func,
     timestrtotime_sql,
+    ts_or_ds_to_date_sql,
 )
 from sqlglot.expressions import DataType
 from sqlglot.helper import seq_get
@@ -207,6 +209,7 @@ class TSQL(Dialect):
     NULL_ORDERING = "nulls_are_small"
     TIME_FORMAT = "'yyyy-mm-dd hh:mm:ss'"
     SUPPORTS_SEMI_ANTI_JOIN = False
+    LOG_BASE_FIRST = False
 
     TIME_MAPPING = {
         "year": "%Y",
@@ -346,6 +349,8 @@ class TSQL(Dialect):
         }
 
     class Parser(parser.Parser):
+        SET_REQUIRES_ASSIGNMENT_DELIMITER = False
+
         FUNCTIONS = {
             **parser.Parser.FUNCTIONS,
             "CHARINDEX": lambda args: exp.StrPosition(
@@ -397,7 +402,6 @@ class TSQL(Dialect):
             TokenType.END: lambda self: self._parse_command(),
         }
 
-        LOG_BASE_FIRST = False
         LOG_DEFAULTS_TO_LN = True
 
         CONCAT_NULL_OUTPUTS_STRING = True
@@ -587,12 +591,14 @@ class TSQL(Dialect):
         NVL2_SUPPORTED = False
         ALTER_TABLE_ADD_COLUMN_KEYWORD = False
         LIMIT_FETCH = "FETCH"
+        COMPUTED_COLUMN_WITH_TYPE = False
 
         TYPE_MAPPING = {
             **generator.Generator.TYPE_MAPPING,
             exp.DataType.Type.BOOLEAN: "BIT",
             exp.DataType.Type.DECIMAL: "NUMERIC",
             exp.DataType.Type.DATETIME: "DATETIME2",
+            exp.DataType.Type.DOUBLE: "FLOAT",
             exp.DataType.Type.INT: "INTEGER",
             exp.DataType.Type.TIMESTAMP: "DATETIME2",
             exp.DataType.Type.TIMESTAMPTZ: "DATETIMEOFFSET",
@@ -610,12 +616,17 @@ class TSQL(Dialect):
             exp.Extract: rename_func("DATEPART"),
             exp.GroupConcat: _string_agg_sql,
             exp.If: rename_func("IIF"),
+            exp.Insert: move_insert_cte_sql,
             exp.Max: max_or_greatest,
             exp.MD5: lambda self, e: self.func("HASHBYTES", exp.Literal.string("MD5"), e.this),
             exp.Min: min_or_least,
             exp.NumberToStr: _format_sql,
             exp.Select: transforms.preprocess(
-                [transforms.eliminate_distinct_on, transforms.eliminate_semi_and_anti_joins]
+                [
+                    transforms.eliminate_distinct_on,
+                    transforms.eliminate_semi_and_anti_joins,
+                    transforms.eliminate_qualify,
+                ]
             ),
             exp.SHA: lambda self, e: self.func("HASHBYTES", exp.Literal.string("SHA1"), e.this),
             exp.SHA2: lambda self, e: self.func(
@@ -626,6 +637,7 @@ class TSQL(Dialect):
             exp.TemporaryProperty: lambda self, e: "",
             exp.TimeStrToTime: timestrtotime_sql,
             exp.TimeToStr: _format_sql,
+            exp.TsOrDsToDate: ts_or_ds_to_date_sql("tsql"),
         }
 
         TRANSFORMS.pop(exp.ReturnsProperty)
@@ -634,6 +646,14 @@ class TSQL(Dialect):
             **generator.Generator.PROPERTIES_LOCATION,
             exp.VolatileProperty: exp.Properties.Location.UNSUPPORTED,
         }
+
+        def setitem_sql(self, expression: exp.SetItem) -> str:
+            this = expression.this
+            if isinstance(this, exp.EQ) and not isinstance(this.left, exp.Parameter):
+                # T-SQL does not use '=' in SET command, except when the LHS is a variable.
+                return f"{self.sql(this.left)} {self.sql(this.right)}"
+
+            return super().setitem_sql(expression)
 
         def boolean_sql(self, expression: exp.Boolean) -> str:
             if type(expression.parent) in BIT_TYPES:

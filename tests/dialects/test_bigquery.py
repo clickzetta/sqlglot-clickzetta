@@ -107,6 +107,10 @@ class TestBigQuery(Validator):
             "SELECT LAST_VALUE(a IGNORE NULLS) OVER y FROM x WINDOW y AS (PARTITION BY CATEGORY)",
         )
         self.validate_identity(
+            "SELECT a overlaps",
+            "SELECT a AS overlaps",
+        )
+        self.validate_identity(
             "SELECT y + 1 z FROM x GROUP BY y + 1 ORDER BY z",
             "SELECT y + 1 AS z FROM x GROUP BY z ORDER BY z",
         )
@@ -118,6 +122,14 @@ class TestBigQuery(Validator):
             """SELECT JSON '"foo"' AS json_data""",
             """SELECT PARSE_JSON('"foo"') AS json_data""",
         )
+        self.validate_identity(
+            "CREATE OR REPLACE TABLE `a.b.c` CLONE `a.b.d`",
+            "CREATE OR REPLACE TABLE a.b.c CLONE a.b.d",
+        )
+        self.validate_identity(
+            "SELECT * FROM UNNEST(x) WITH OFFSET EXCEPT DISTINCT SELECT * FROM UNNEST(y) WITH OFFSET",
+            "SELECT * FROM UNNEST(x) WITH OFFSET AS offset EXCEPT DISTINCT SELECT * FROM UNNEST(y) WITH OFFSET AS offset",
+        )
 
         self.validate_all("SELECT SPLIT(foo)", write={"bigquery": "SELECT SPLIT(foo, ',')"})
         self.validate_all("SELECT 1 AS hash", write={"bigquery": "SELECT 1 AS `hash`"})
@@ -126,6 +138,35 @@ class TestBigQuery(Validator):
         self.validate_all('x <> """"""', write={"bigquery": "x <> ''"})
         self.validate_all("x <> ''''''", write={"bigquery": "x <> ''"})
         self.validate_all("CAST(x AS DATETIME)", read={"": "x::timestamp"})
+        self.validate_all(
+            "SELECT '\\n'",
+            read={
+                "bigquery": "SELECT '''\n'''",
+            },
+            write={
+                "bigquery": "SELECT '\\n'",
+                "postgres": "SELECT '\n'",
+            },
+        )
+        self.validate_all(
+            "TRIM(item, '*')",
+            read={
+                "snowflake": "TRIM(item, '*')",
+                "spark": "TRIM('*', item)",
+            },
+            write={
+                "bigquery": "TRIM(item, '*')",
+                "snowflake": "TRIM(item, '*')",
+                "spark": "TRIM('*' FROM item)",
+            },
+        )
+        self.validate_all(
+            "CREATE OR REPLACE TABLE `a.b.c` COPY `a.b.d`",
+            write={
+                "bigquery": "CREATE OR REPLACE TABLE a.b.c COPY a.b.d",
+                "snowflake": "CREATE OR REPLACE TABLE a.b.c CLONE a.b.d",
+            },
+        )
         self.validate_all(
             "SELECT DATETIME_DIFF('2023-01-01T00:00:00', '2023-01-01T05:00:00', MILLISECOND)",
             write={
@@ -604,6 +645,9 @@ class TestBigQuery(Validator):
                 "postgres": "CURRENT_DATE AT TIME ZONE 'UTC'",
             },
         )
+        self.validate_identity(
+            "SELECT * FROM test QUALIFY a IS DISTINCT FROM b WINDOW c AS (PARTITION BY d)"
+        )
         self.validate_all(
             "SELECT a FROM test WHERE a = 1 GROUP BY a HAVING a = 2 QUALIFY z ORDER BY a LIMIT 10",
             write={
@@ -706,6 +750,8 @@ WHERE
             pretty=True,
         )
 
+        self.validate_identity("LOG(n, b)")
+
     def test_user_defined_functions(self):
         self.validate_identity(
             "CREATE TEMPORARY FUNCTION a(x FLOAT64, y FLOAT64) RETURNS FLOAT64 NOT DETERMINISTIC LANGUAGE js AS 'return x*y;'"
@@ -714,6 +760,10 @@ WHERE
         self.validate_identity("CREATE TEMPORARY FUNCTION a(x FLOAT64, y FLOAT64) AS ((x + 4) / y)")
         self.validate_identity(
             "CREATE TABLE FUNCTION a(x INT64) RETURNS TABLE <q STRING, r INT64> AS SELECT s, t"
+        )
+        self.validate_identity(
+            '''CREATE TEMPORARY FUNCTION string_length_0(strings ARRAY<STRING>) RETURNS FLOAT64 LANGUAGE js AS """'use strict'; function string_length(strings) { return _.sum(_.map(strings, ((x) => x.length))); } return string_length(strings);""" OPTIONS (library=['gs://ibis-testing-libraries/lodash.min.js'])''',
+            "CREATE TEMPORARY FUNCTION string_length_0(strings ARRAY<STRING>) RETURNS FLOAT64 LANGUAGE js OPTIONS (library=['gs://ibis-testing-libraries/lodash.min.js']) AS '\\'use strict\\'; function string_length(strings) { return _.sum(_.map(strings, ((x) => x.length))); } return string_length(strings);'",
         )
 
     def test_group_concat(self):
@@ -752,6 +802,63 @@ WHERE
             write={
                 "bigquery": "INSERT INTO test (cola, colb) VALUES (CAST(7 AS STRING), CAST(14 AS STRING))",
             },
+        )
+
+    def test_models(self):
+        self.validate_identity(
+            "SELECT * FROM ML.PREDICT(MODEL mydataset.mymodel, (SELECT label, column1, column2 FROM mydataset.mytable))"
+        )
+        self.validate_identity(
+            "SELECT label, predicted_label1, predicted_label AS predicted_label2 FROM ML.PREDICT(MODEL mydataset.mymodel2, (SELECT * EXCEPT (predicted_label), predicted_label AS predicted_label1 FROM ML.PREDICT(MODEL mydataset.mymodel1, TABLE mydataset.mytable)))"
+        )
+        self.validate_identity(
+            "SELECT * FROM ML.PREDICT(MODEL mydataset.mymodel, (SELECT custom_label, column1, column2 FROM mydataset.mytable), STRUCT(0.55 AS threshold))"
+        )
+        self.validate_identity(
+            "SELECT * FROM ML.PREDICT(MODEL `my_project`.my_dataset.my_model, (SELECT * FROM input_data))"
+        )
+        self.validate_identity(
+            "SELECT * FROM ML.PREDICT(MODEL my_dataset.vision_model, (SELECT uri, ML.RESIZE_IMAGE(ML.DECODE_IMAGE(data), 480, 480, FALSE) AS input FROM my_dataset.object_table))"
+        )
+        self.validate_identity(
+            "SELECT * FROM ML.PREDICT(MODEL my_dataset.vision_model, (SELECT uri, ML.CONVERT_COLOR_SPACE(ML.RESIZE_IMAGE(ML.DECODE_IMAGE(data), 224, 280, TRUE), 'YIQ') AS input FROM my_dataset.object_table WHERE content_type = 'image/jpeg'))"
+        )
+        self.validate_identity(
+            "CREATE OR REPLACE MODEL foo OPTIONS (model_type='linear_reg') AS SELECT bla FROM foo WHERE cond"
+        )
+        self.validate_identity(
+            """CREATE OR REPLACE MODEL m
+TRANSFORM(
+  ML.FEATURE_CROSS(STRUCT(f1, f2)) AS cross_f,
+  ML.QUANTILE_BUCKETIZE(f3) OVER () AS buckets,
+  label_col
+)
+OPTIONS (
+  model_type='linear_reg',
+  input_label_cols=['label_col']
+) AS
+SELECT
+  *
+FROM t""",
+            pretty=True,
+        )
+        self.validate_identity(
+            """CREATE MODEL project_id.mydataset.mymodel
+INPUT(
+  f1 INT64,
+  f2 FLOAT64,
+  f3 STRING,
+  f4 ARRAY<INT64>
+)
+OUTPUT(
+  out1 INT64,
+  out2 INT64
+)
+REMOTE WITH CONNECTION myproject.us.test_connection
+OPTIONS (
+  ENDPOINT='https://us-central1-aiplatform.googleapis.com/v1/projects/myproject/locations/us-central1/endpoints/1234'
+)""",
+            pretty=True,
         )
 
     def test_merge(self):

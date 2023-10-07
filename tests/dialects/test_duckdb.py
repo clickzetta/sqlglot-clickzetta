@@ -10,6 +10,10 @@ class TestDuckDB(Validator):
             parse_one("select * from t limit (select 5)").sql(dialect="duckdb"),
             exp.select("*").from_("t").limit(exp.select("5").subquery()).sql(dialect="duckdb"),
         )
+        self.assertEqual(
+            parse_one("select * from t offset (select 5)").sql(dialect="duckdb"),
+            exp.select("*").from_("t").offset(exp.select("5").subquery()).sql(dialect="duckdb"),
+        )
 
         for struct_value in ("{'a': 1}", "struct_pack(a := 1)"):
             self.validate_all(struct_value, write={"presto": UnsupportedError})
@@ -76,6 +80,18 @@ class TestDuckDB(Validator):
             write={
                 "bigquery": "SELECT IF(pos = pos_2, col, NULL) AS col, IF(pos = pos_3, col_2, NULL) AS col_2, IF(pos = pos_4, col_3, NULL) AS col_3 FROM x, UNNEST(GENERATE_ARRAY(0, GREATEST(ARRAY_LENGTH([1, 2, 3]), ARRAY_LENGTH([4, 5]), ARRAY_LENGTH([6])) - 1)) AS pos CROSS JOIN UNNEST([1, 2, 3]) AS col WITH OFFSET AS pos_2 CROSS JOIN UNNEST([4, 5]) AS col_2 WITH OFFSET AS pos_3 CROSS JOIN UNNEST([6]) AS col_3 WITH OFFSET AS pos_4 WHERE ((pos = pos_2 OR (pos > (ARRAY_LENGTH([1, 2, 3]) - 1) AND pos_2 = (ARRAY_LENGTH([1, 2, 3]) - 1))) AND (pos = pos_3 OR (pos > (ARRAY_LENGTH([4, 5]) - 1) AND pos_3 = (ARRAY_LENGTH([4, 5]) - 1)))) AND (pos = pos_4 OR (pos > (ARRAY_LENGTH([6]) - 1) AND pos_4 = (ARRAY_LENGTH([6]) - 1)))",
                 "presto": "SELECT IF(pos = pos_2, col) AS col, IF(pos = pos_3, col_2) AS col_2, IF(pos = pos_4, col_3) AS col_3 FROM x, UNNEST(SEQUENCE(1, GREATEST(CARDINALITY(ARRAY[1, 2, 3]), CARDINALITY(ARRAY[4, 5]), CARDINALITY(ARRAY[6])))) AS _u(pos) CROSS JOIN UNNEST(ARRAY[1, 2, 3]) WITH ORDINALITY AS _u_2(col, pos_2) CROSS JOIN UNNEST(ARRAY[4, 5]) WITH ORDINALITY AS _u_3(col_2, pos_3) CROSS JOIN UNNEST(ARRAY[6]) WITH ORDINALITY AS _u_4(col_3, pos_4) WHERE ((pos = pos_2 OR (pos > CARDINALITY(ARRAY[1, 2, 3]) AND pos_2 = CARDINALITY(ARRAY[1, 2, 3]))) AND (pos = pos_3 OR (pos > CARDINALITY(ARRAY[4, 5]) AND pos_3 = CARDINALITY(ARRAY[4, 5])))) AND (pos = pos_4 OR (pos > CARDINALITY(ARRAY[6]) AND pos_4 = CARDINALITY(ARRAY[6])))",
+            },
+        )
+        self.validate_all(
+            "SELECT UNNEST(x) + 1",
+            write={
+                "bigquery": "SELECT IF(pos = pos_2, col, NULL) + 1 AS col FROM UNNEST(GENERATE_ARRAY(0, GREATEST(ARRAY_LENGTH(x)) - 1)) AS pos CROSS JOIN UNNEST(x) AS col WITH OFFSET AS pos_2 WHERE pos = pos_2 OR (pos > (ARRAY_LENGTH(x) - 1) AND pos_2 = (ARRAY_LENGTH(x) - 1))",
+            },
+        )
+        self.validate_all(
+            "SELECT UNNEST(x) + 1 AS y",
+            write={
+                "bigquery": "SELECT IF(pos = pos_2, y, NULL) + 1 AS y FROM UNNEST(GENERATE_ARRAY(0, GREATEST(ARRAY_LENGTH(x)) - 1)) AS pos CROSS JOIN UNNEST(x) AS y WITH OFFSET AS pos_2 WHERE pos = pos_2 OR (pos > (ARRAY_LENGTH(x) - 1) AND pos_2 = (ARRAY_LENGTH(x) - 1))",
             },
         )
 
@@ -275,6 +291,8 @@ class TestDuckDB(Validator):
                 "duckdb": "STRUCT_EXTRACT(x, 'abc')",
                 "presto": "x.abc",
                 "hive": "x.abc",
+                "postgres": "x.abc",
+                "redshift": "x.abc",
                 "spark": "x.abc",
             },
         )
@@ -434,6 +452,7 @@ class TestDuckDB(Validator):
             write={
                 "duckdb": "SELECT QUANTILE_CONT(x, q) FROM t",
                 "postgres": "SELECT PERCENTILE_CONT(q) WITHIN GROUP (ORDER BY x) FROM t",
+                "snowflake": "SELECT PERCENTILE_CONT(q) WITHIN GROUP (ORDER BY x) FROM t",
             },
         )
         self.validate_all(
@@ -441,6 +460,7 @@ class TestDuckDB(Validator):
             write={
                 "duckdb": "SELECT QUANTILE_DISC(x, q) FROM t",
                 "postgres": "SELECT PERCENTILE_DISC(q) WITHIN GROUP (ORDER BY x) FROM t",
+                "snowflake": "SELECT PERCENTILE_DISC(q) WITHIN GROUP (ORDER BY x) FROM t",
             },
         )
         self.validate_all(
@@ -448,6 +468,7 @@ class TestDuckDB(Validator):
             write={
                 "duckdb": "SELECT QUANTILE_CONT(x, 0.5) FROM t",
                 "postgres": "SELECT PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY x) FROM t",
+                "snowflake": "SELECT PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY x) FROM t",
             },
         )
 

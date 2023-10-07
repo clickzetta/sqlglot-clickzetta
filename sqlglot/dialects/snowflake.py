@@ -239,6 +239,8 @@ class Snowflake(Dialect):
     class Parser(parser.Parser):
         IDENTIFY_PIVOT_STRINGS = True
 
+        TABLE_ALIAS_TOKENS = parser.Parser.TABLE_ALIAS_TOKENS | {TokenType.WINDOW}
+
         FUNCTIONS = {
             **parser.Parser.FUNCTIONS,
             "ARRAYAGG": exp.ArrayAgg.from_arg_list,
@@ -318,6 +320,43 @@ class Snowflake(Dialect):
             "TERSE PRIMARY KEYS": _show_parser("PRIMARY KEYS"),
         }
 
+        STAGED_FILE_SINGLE_TOKENS = {
+            TokenType.DOT,
+            TokenType.MOD,
+            TokenType.SLASH,
+        }
+
+        def _parse_table_parts(self, schema: bool = False) -> exp.Table:
+            # https://docs.snowflake.com/en/user-guide/querying-stage
+            table: t.Optional[exp.Expression] = None
+            if self._match_text_seq("@"):
+                table_name = "@"
+                while True:
+                    self._advance()
+                    table_name += self._prev.text
+                    if not self._match_set(self.STAGED_FILE_SINGLE_TOKENS, advance=False):
+                        break
+                    while self._match_set(self.STAGED_FILE_SINGLE_TOKENS):
+                        table_name += self._prev.text
+
+                table = exp.var(table_name)
+            elif self._match(TokenType.STRING, advance=False):
+                table = self._parse_string()
+
+            if table:
+                file_format = None
+                pattern = None
+
+                if self._match_text_seq("(", "FILE_FORMAT", "=>"):
+                    file_format = self._parse_string() or super()._parse_table_parts()
+                    if self._match_text_seq(",", "PATTERN", "=>"):
+                        pattern = self._parse_string()
+                    self._match_r_paren()
+
+                return self.expression(exp.Table, this=table, format=file_format, pattern=pattern)
+
+            return super()._parse_table_parts(schema=schema)
+
         def _parse_id_var(
             self,
             any_token: bool = True,
@@ -394,6 +433,8 @@ class Snowflake(Dialect):
         TABLE_HINTS = False
         QUERY_HINTS = False
         AGGREGATE_FILTER_SUPPORTED = False
+        SUPPORTS_TABLE_COPY = False
+        COLLATE_IS_FUNC = True
 
         TRANSFORMS = {
             **generator.Generator.TRANSFORMS,
@@ -423,6 +464,12 @@ class Snowflake(Dialect):
             exp.Max: max_or_greatest,
             exp.Min: min_or_least,
             exp.PartitionedByProperty: lambda self, e: f"PARTITION BY {self.sql(e, 'this')}",
+            exp.PercentileCont: transforms.preprocess(
+                [transforms.add_within_group_for_percentiles]
+            ),
+            exp.PercentileDisc: transforms.preprocess(
+                [transforms.add_within_group_for_percentiles]
+            ),
             exp.RegexpILike: _regexpilike_sql,
             exp.Select: transforms.preprocess(
                 [

@@ -17,6 +17,7 @@ def canonicalize(expression: exp.Expression) -> exp.Expression:
     exp.replace_children(expression, canonicalize)
 
     expression = add_text_to_concat(expression)
+    expression = replace_date_funcs(expression)
     expression = coerce_type(expression)
     expression = remove_redundant_casts(expression)
     expression = ensure_bool_predicates(expression)
@@ -31,14 +32,24 @@ def add_text_to_concat(node: exp.Expression) -> exp.Expression:
     return node
 
 
+def replace_date_funcs(node: exp.Expression) -> exp.Expression:
+    if isinstance(node, exp.Date) and not node.expressions and not node.args.get("zone"):
+        return exp.cast(node.this, to=exp.DataType.Type.DATE)
+    if isinstance(node, exp.Timestamp) and not node.expression:
+        return exp.cast(node.this, to=exp.DataType.Type.TIMESTAMP)
+    return node
+
+
 def coerce_type(node: exp.Expression) -> exp.Expression:
     if isinstance(node, exp.Binary):
         _coerce_date(node.left, node.right)
     elif isinstance(node, exp.Between):
         _coerce_date(node.this, node.args["low"])
-    elif isinstance(node, exp.Extract):
-        if node.expression.type.this not in exp.DataType.TEMPORAL_TYPES:
-            _replace_cast(node.expression, "datetime")
+    elif isinstance(node, exp.Extract) and not node.expression.type.is_type(
+        *exp.DataType.TEMPORAL_TYPES
+    ):
+        _replace_cast(node.expression, exp.DataType.Type.DATETIME)
+
     return node
 
 
@@ -58,7 +69,7 @@ def ensure_bool_predicates(expression: exp.Expression) -> exp.Expression:
         _replace_int_predicate(expression.left)
         _replace_int_predicate(expression.right)
 
-    elif isinstance(expression, (exp.Where, exp.Having)):
+    elif isinstance(expression, (exp.Where, exp.Having, exp.If)):
         _replace_int_predicate(expression.this)
 
     return expression
@@ -80,16 +91,16 @@ def _coerce_date(a: exp.Expression, b: exp.Expression) -> None:
             and b.type
             and b.type.this not in (exp.DataType.Type.DATE, exp.DataType.Type.INTERVAL)
         ):
-            _replace_cast(b, "date")
+            _replace_cast(b, exp.DataType.Type.DATE)
 
 
-def _replace_cast(node: exp.Expression, to: str) -> None:
-    data_type = exp.DataType.build(to)
-    cast = exp.Cast(this=node.copy(), to=data_type)
-    cast.type = data_type
-    node.replace(cast)
+def _replace_cast(node: exp.Expression, to: exp.DataType.Type) -> None:
+    node.replace(exp.cast(node.copy(), to=to))
 
 
 def _replace_int_predicate(expression: exp.Expression) -> None:
-    if expression.type and expression.type.this in exp.DataType.INTEGER_TYPES:
+    if isinstance(expression, exp.Coalesce):
+        for _, child in expression.iter_expressions():
+            _replace_int_predicate(child)
+    elif expression.type and expression.type.this in exp.DataType.INTEGER_TYPES:
         expression.replace(exp.NEQ(this=expression.copy(), expression=exp.Literal.number(0)))

@@ -7,6 +7,45 @@ class TestTSQL(Validator):
 
     def test_tsql(self):
         self.validate_all(
+            "CREATE TABLE #mytemptable (a INTEGER)",
+            read={
+                "duckdb": "CREATE TEMPORARY TABLE mytemptable (a INT)",
+            },
+            write={
+                "tsql": "CREATE TABLE #mytemptable (a INTEGER)",
+                "snowflake": "CREATE TEMPORARY TABLE mytemptable (a INT)",
+                "duckdb": "CREATE TEMPORARY TABLE mytemptable (a INT)",
+                "oracle": "CREATE TEMPORARY TABLE mytemptable (a NUMBER)",
+                "hive": "CREATE TEMPORARY TABLE mytemptable (a INT)",
+                "spark2": "CREATE TEMPORARY TABLE mytemptable (a INT) USING PARQUET",
+                "spark": "CREATE TEMPORARY TABLE mytemptable (a INT) USING PARQUET",
+                "databricks": "CREATE TEMPORARY TABLE mytemptable (a INT) USING PARQUET",
+            },
+        )
+        self.validate_all(
+            "CREATE TABLE #mytemp (a INTEGER, b CHAR(2), c TIME(4), d FLOAT(24))",
+            write={
+                "spark": "CREATE TEMPORARY TABLE mytemp (a INT, b CHAR(2), c TIMESTAMP, d FLOAT) USING PARQUET",
+                "tsql": "CREATE TABLE #mytemp (a INTEGER, b CHAR(2), c TIME(4), d FLOAT(24))",
+            },
+        )
+        self.validate_all(
+            """CREATE TABLE [dbo].[mytable](
+                [email] [varchar](255) NOT NULL,
+                CONSTRAINT [UN_t_mytable] UNIQUE NONCLUSTERED
+                (
+                    [email] ASC
+                )
+                )""",
+            write={
+                "hive": "CREATE TABLE `dbo`.`mytable` (`email` VARCHAR(255) NOT NULL)",
+                "spark2": "CREATE TABLE `dbo`.`mytable` (`email` VARCHAR(255) NOT NULL)",
+                "spark": "CREATE TABLE `dbo`.`mytable` (`email` VARCHAR(255) NOT NULL)",
+                "databricks": "CREATE TABLE `dbo`.`mytable` (`email` VARCHAR(255) NOT NULL)",
+            },
+        )
+
+        self.validate_all(
             "CREATE TABLE x ( A INTEGER NOT NULL, B INTEGER NULL )",
             write={
                 "tsql": "CREATE TABLE x (A INTEGER NOT NULL, B INTEGER NULL)",
@@ -198,6 +237,7 @@ class TestTSQL(Validator):
             },
         )
         self.validate_identity("HASHBYTES('MD2', 'x')")
+        self.validate_identity("LOG(n, b)")
 
     def test_types(self):
         self.validate_identity("CAST(x AS XML)")
@@ -303,7 +343,7 @@ class TestTSQL(Validator):
             "CAST(x as DOUBLE)",
             write={
                 "spark": "CAST(x AS DOUBLE)",
-                "tsql": "CAST(x AS DOUBLE)",
+                "tsql": "CAST(x AS FLOAT)",
             },
         )
 
@@ -491,6 +531,10 @@ class TestTSQL(Validator):
         )
 
     def test_ddl(self):
+        self.validate_identity(
+            "CREATE PROCEDURE foo AS BEGIN DELETE FROM bla WHERE foo < CURRENT_TIMESTAMP - 7 END",
+            "CREATE PROCEDURE foo AS BEGIN DELETE FROM bla WHERE foo < GETDATE() - 7 END",
+        )
         self.validate_all(
             "CREATE TABLE tbl (id INTEGER IDENTITY PRIMARY KEY)",
             read={
@@ -503,6 +547,9 @@ class TestTSQL(Validator):
             read={
                 "postgres": "CREATE TABLE tbl (id INT NOT NULL GENERATED ALWAYS AS IDENTITY (START WITH 10) PRIMARY KEY)",
                 "tsql": "CREATE TABLE tbl (id INTEGER NOT NULL IDENTITY(10, 1) PRIMARY KEY)",
+            },
+            write={
+                "databricks": "CREATE TABLE tbl (id BIGINT NOT NULL GENERATED ALWAYS AS IDENTITY (START WITH 10 INCREMENT BY 1) PRIMARY KEY)",
             },
         )
         self.validate_all(
@@ -560,21 +607,15 @@ class TestTSQL(Validator):
         self.validate_all(
             "CREATE TABLE #mytemp (a INTEGER, b CHAR(2), c TIME(4), d FLOAT(24))",
             write={
-                "spark": "CREATE TEMPORARY TABLE mytemp (a INT, b CHAR(2), c TIMESTAMP, d FLOAT)",
+                "spark": "CREATE TEMPORARY TABLE mytemp (a INT, b CHAR(2), c TIMESTAMP, d FLOAT) USING PARQUET",
                 "tsql": "CREATE TABLE #mytemp (a INTEGER, b CHAR(2), c TIME(4), d FLOAT(24))",
             },
         )
+
+    def test_insert_cte(self):
         self.validate_all(
-            "CREATE TABLE #mytemptable (a INTEGER)",
-            read={
-                "duckdb": "CREATE TEMPORARY TABLE mytemptable (a INT)",
-            },
-            write={
-                "tsql": "CREATE TABLE #mytemptable (a INTEGER)",
-                "snowflake": "CREATE TEMPORARY TABLE mytemptable (a INT)",
-                "duckdb": "CREATE TEMPORARY TABLE mytemptable (a INT)",
-                "oracle": "CREATE TEMPORARY TABLE mytemptable (a NUMBER)",
-            },
+            "INSERT INTO foo.bar WITH cte AS (SELECT 1 AS one) SELECT * FROM cte",
+            write={"tsql": "WITH cte AS (SELECT 1 AS one) INSERT INTO foo.bar SELECT * FROM cte"},
         )
 
     def test_transaction(self):
@@ -1187,6 +1228,16 @@ WHERE
         self.assertIsInstance(table.this, exp.Parameter)
         self.assertIsInstance(table.this.this, exp.Var)
 
+        self.validate_all(
+            "SELECT @x",
+            write={
+                "databricks": "SELECT ${x}",
+                "hive": "SELECT ${x}",
+                "spark": "SELECT ${x}",
+                "tsql": "SELECT @x",
+            },
+        )
+
     def test_temp_table(self):
         self.validate_all(
             "SELECT * FROM #mytemptable",
@@ -1327,4 +1378,22 @@ FROM OPENJSON(@json) WITH (
 )"""
             },
             pretty=True,
+        )
+
+    def test_set(self):
+        self.validate_all(
+            "SET KEY VALUE",
+            write={
+                "tsql": "SET KEY VALUE",
+                "duckdb": "SET KEY = VALUE",
+                "spark": "SET KEY = VALUE",
+            },
+        )
+        self.validate_all(
+            "SET @count = (SELECT COUNT(1) FROM x)",
+            write={
+                "databricks": "SET count = (SELECT COUNT(1) FROM x)",
+                "tsql": "SET @count = (SELECT COUNT(1) FROM x)",
+                "spark": "SET count = (SELECT COUNT(1) FROM x)",
+            },
         )

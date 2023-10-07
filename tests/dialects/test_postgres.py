@@ -10,9 +10,13 @@ class TestPostgres(Validator):
 
     def test_ddl(self):
         self.validate_identity(
+            "CREATE INDEX foo ON bar.baz USING btree(col1 varchar_pattern_ops ASC, col2)"
+        )
+        self.validate_identity(
             "CREATE TABLE test (x TIMESTAMP WITHOUT TIME ZONE[][])",
             "CREATE TABLE test (x TIMESTAMP[][])",
         )
+        self.validate_identity("CREATE INDEX idx_x ON x USING BTREE(x, y) WHERE (NOT y IS NULL)")
         self.validate_identity("CREATE TABLE test (elems JSONB[])")
         self.validate_identity("CREATE TABLE public.y (x TSTZRANGE NOT NULL)")
         self.validate_identity("CREATE TABLE test (foo HSTORE)")
@@ -83,6 +87,28 @@ class TestPostgres(Validator):
                 " CONSTRAINT valid_discount CHECK (price > discounted_price))"
             },
         )
+        self.validate_identity(
+            """
+            CREATE INDEX index_ci_builds_on_commit_id_and_artifacts_expireatandidpartial
+            ON public.ci_builds
+            USING btree (commit_id, artifacts_expire_at, id)
+            WHERE (
+                ((type)::text = 'Ci::Build'::text)
+                AND ((retried = false) OR (retried IS NULL))
+                AND ((name)::text = ANY (ARRAY[
+                    ('sast'::character varying)::text,
+                    ('dependency_scanning'::character varying)::text,
+                    ('sast:container'::character varying)::text,
+                    ('container_scanning'::character varying)::text,
+                    ('dast'::character varying)::text
+                ]))
+            )
+            """,
+            "CREATE INDEX index_ci_builds_on_commit_id_and_artifacts_expireatandidpartial ON public.ci_builds USING btree(commit_id, artifacts_expire_at, id) WHERE ((CAST((type) AS TEXT) = CAST('Ci::Build' AS TEXT)) AND ((retried = FALSE) OR (retried IS NULL)) AND (CAST((name) AS TEXT) = ANY (ARRAY[CAST((CAST('sast' AS VARCHAR)) AS TEXT), CAST((CAST('dependency_scanning' AS VARCHAR)) AS TEXT), CAST((CAST('sast:container' AS VARCHAR)) AS TEXT), CAST((CAST('container_scanning' AS VARCHAR)) AS TEXT), CAST((CAST('dast' AS VARCHAR)) AS TEXT)])))",
+        )
+        self.validate_identity(
+            "CREATE INDEX index_ci_pipelines_on_project_idandrefandiddesc ON public.ci_pipelines USING btree(project_id, ref, id DESC)"
+        )
 
         with self.assertRaises(ParseError):
             transpile("CREATE TABLE products (price DECIMAL CHECK price > 0)", read="postgres")
@@ -126,19 +152,41 @@ class TestPostgres(Validator):
         )
 
     def test_postgres(self):
-        expr = parse_one("SELECT * FROM r CROSS JOIN LATERAL UNNEST(ARRAY[1]) AS s(location)")
+        expr = parse_one(
+            "SELECT * FROM r CROSS JOIN LATERAL UNNEST(ARRAY[1]) AS s(location)", read="postgres"
+        )
         unnest = expr.args["joins"][0].this.this
         unnest.assert_is(exp.Unnest)
 
         alter_table_only = """ALTER TABLE ONLY "Album" ADD CONSTRAINT "FK_AlbumArtistId" FOREIGN KEY ("ArtistId") REFERENCES "Artist" ("ArtistId") ON DELETE NO ACTION ON UPDATE NO ACTION"""
-        expr = parse_one(alter_table_only)
+        expr = parse_one(alter_table_only, read="postgres")
 
         # Checks that user-defined types are parsed into DataType instead of Identifier
-        parse_one("CREATE TABLE t (a udt)").this.expressions[0].args["kind"].assert_is(exp.DataType)
+        parse_one("CREATE TABLE t (a udt)", read="postgres").this.expressions[0].args[
+            "kind"
+        ].assert_is(exp.DataType)
+
+        # Checks that OID is parsed into a DataType (ObjectIdentifier)
+        self.assertIsInstance(
+            parse_one("CREATE TABLE public.propertydata (propertyvalue oid)", read="postgres").find(
+                exp.DataType
+            ),
+            exp.ObjectIdentifier,
+        )
 
         self.assertIsInstance(expr, exp.AlterTable)
         self.assertEqual(expr.sql(dialect="postgres"), alter_table_only)
 
+        self.validate_identity(
+            "SELECT ARRAY[]::INT[] AS foo",
+            "SELECT CAST(ARRAY[] AS INT[]) AS foo",
+        )
+        self.validate_identity(
+            """ALTER TABLE ONLY "Album" ADD CONSTRAINT "FK_AlbumArtistId" FOREIGN KEY ("ArtistId") REFERENCES "Artist" ("ArtistId") ON DELETE CASCADE"""
+        )
+        self.validate_identity(
+            """ALTER TABLE ONLY "Album" ADD CONSTRAINT "FK_AlbumArtistId" FOREIGN KEY ("ArtistId") REFERENCES "Artist" ("ArtistId") ON DELETE RESTRICT"""
+        )
         self.validate_identity("x @@ y")
         self.validate_identity("CAST(x AS MONEY)")
         self.validate_identity("CAST(x AS INT4RANGE)")
@@ -159,7 +207,6 @@ class TestPostgres(Validator):
         self.validate_identity("SELECT ARRAY[1, 2, 3] @> ARRAY[1, 2]")
         self.validate_identity("SELECT ARRAY[1, 2, 3] <@ ARRAY[1, 2]")
         self.validate_identity("SELECT ARRAY[1, 2, 3] && ARRAY[1, 2]")
-        self.validate_identity("$x")
         self.validate_identity("x$")
         self.validate_identity("SELECT ARRAY[1, 2, 3]")
         self.validate_identity("SELECT ARRAY(SELECT 1)")
@@ -601,10 +648,10 @@ class TestPostgres(Validator):
             },
         )
         self.validate_all(
-            "merge into x as x using (select id) as y on a = b WHEN matched then update set X.a = y.b",
+            """merge into x as x using (select id) as y on a = b WHEN matched then update set X."A" = y.b""",
             write={
-                "postgres": "MERGE INTO x AS x USING (SELECT id) AS y ON a = b WHEN MATCHED THEN UPDATE SET a = y.b",
-                "snowflake": "MERGE INTO x AS x USING (SELECT id) AS y ON a = b WHEN MATCHED THEN UPDATE SET X.a = y.b",
+                "postgres": """MERGE INTO x AS x USING (SELECT id) AS y ON a = b WHEN MATCHED THEN UPDATE SET "A" = y.b""",
+                "snowflake": """MERGE INTO x AS x USING (SELECT id) AS y ON a = b WHEN MATCHED THEN UPDATE SET X."A" = y.b""",
             },
         )
         self.validate_all(
@@ -676,4 +723,12 @@ class TestPostgres(Validator):
                 "postgres": "a || b",
                 "presto": "CONCAT(CAST(a AS VARCHAR), CAST(b AS VARCHAR))",
             },
+        )
+
+    def test_variance(self):
+        self.validate_all("VAR_SAMP(x)", write={"postgres": "VAR_SAMP(x)"})
+        self.validate_all("VAR_POP(x)", write={"postgres": "VAR_POP(x)"})
+        self.validate_all("VARIANCE(x)", write={"postgres": "VAR_SAMP(x)"})
+        self.validate_all(
+            "VAR_POP(x)", read={"": "VARIANCE_POP(x)"}, write={"postgres": "VAR_POP(x)"}
         )

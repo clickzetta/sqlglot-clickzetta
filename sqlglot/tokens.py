@@ -77,6 +77,7 @@ class TokenType(AutoName):
     BYTE_STRING = auto()
     NATIONAL_STRING = auto()
     RAW_STRING = auto()
+    HEREDOC_STRING = auto()
 
     # types
     BIT = auto()
@@ -98,6 +99,7 @@ class TokenType(AutoName):
     FLOAT = auto()
     DOUBLE = auto()
     DECIMAL = auto()
+    UDECIMAL = auto()
     BIGDECIMAL = auto()
     CHAR = auto()
     NCHAR = auto()
@@ -247,6 +249,7 @@ class TokenType(AutoName):
     JOIN = auto()
     JOIN_MARKER = auto()
     KEEP = auto()
+    KILL = auto()
     LANGUAGE = auto()
     LATERAL = auto()
     LEFT = auto()
@@ -260,6 +263,7 @@ class TokenType(AutoName):
     MEMBER_OF = auto()
     MERGE = auto()
     MOD = auto()
+    MODEL = auto()
     NATURAL = auto()
     NEXT = auto()
     NOTNULL = auto()
@@ -417,6 +421,7 @@ class _Tokenizer(type):
             **_quotes_to_format(TokenType.BYTE_STRING, klass.BYTE_STRINGS),
             **_quotes_to_format(TokenType.HEX_STRING, klass.HEX_STRINGS),
             **_quotes_to_format(TokenType.RAW_STRING, klass.RAW_STRINGS),
+            **_quotes_to_format(TokenType.HEREDOC_STRING, klass.HEREDOC_STRINGS),
         }
 
         klass._STRING_ESCAPES = set(klass.STRING_ESCAPES)
@@ -483,11 +488,13 @@ class Tokenizer(metaclass=_Tokenizer):
     BYTE_STRINGS: t.List[str | t.Tuple[str, str]] = []
     HEX_STRINGS: t.List[str | t.Tuple[str, str]] = []
     RAW_STRINGS: t.List[str | t.Tuple[str, str]] = []
+    HEREDOC_STRINGS: t.List[str | t.Tuple[str, str]] = []
     IDENTIFIERS: t.List[str | t.Tuple[str, str]] = ['"']
     IDENTIFIER_ESCAPES = ['"']
     QUOTES: t.List[t.Tuple[str, str] | str] = ["'"]
     STRING_ESCAPES = ["'"]
     VAR_SINGLE_TOKENS: t.Set[str] = set()
+    ESCAPE_SEQUENCES: t.Dict[str, str] = {}
 
     # Autofilled
     IDENTIFIERS_CAN_START_WITH_DIGIT: bool = False
@@ -595,6 +602,7 @@ class Tokenizer(metaclass=_Tokenizer):
         "ISNULL": TokenType.ISNULL,
         "JOIN": TokenType.JOIN,
         "KEEP": TokenType.KEEP,
+        "KILL": TokenType.KILL,
         "LATERAL": TokenType.LATERAL,
         "LEFT": TokenType.LEFT,
         "LIKE": TokenType.LIKE,
@@ -995,9 +1003,11 @@ class Tokenizer(metaclass=_Tokenizer):
                 word = word.upper()
                 self._add(self.KEYWORDS[word], text=word)
                 return
+
         if self._char in self.SINGLE_TOKENS:
             self._add(self.SINGLE_TOKENS[self._char], text=self._char)
             return
+
         self._scan_var()
 
     def _scan_comment(self, comment_start: str) -> bool:
@@ -1124,6 +1134,10 @@ class Tokenizer(metaclass=_Tokenizer):
                 base = 16
             elif token_type == TokenType.BIT_STRING:
                 base = 2
+            elif token_type == TokenType.HEREDOC_STRING:
+                self._advance()
+                tag = "" if self._char == end else self._extract_string(end)
+                end = f"{start}{tag}{end}"
         else:
             return False
 
@@ -1190,6 +1204,13 @@ class Tokenizer(metaclass=_Tokenizer):
 
                 if self._end:
                     raise TokenError(f"Missing {delimiter} from {self._line}:{self._start}")
+
+                if self.ESCAPE_SEQUENCES and self._peek and self._char in self.STRING_ESCAPES:
+                    escaped_sequence = self.ESCAPE_SEQUENCES.get(self._char + self._peek)
+                    if escaped_sequence:
+                        self._advance(2)
+                        text += escaped_sequence
+                        continue
 
                 current = self._current - 1
                 self._advance(alnum=True)

@@ -52,6 +52,9 @@ class _Expression(type):
         return klass
 
 
+SQLGLOT_META = "sqlglot.meta"
+
+
 class Expression(metaclass=_Expression):
     """
     The base class for all expressions in a syntax tree. Each Expression encapsulates any necessary
@@ -266,7 +269,14 @@ class Expression(metaclass=_Expression):
         if self.comments is None:
             self.comments = []
         if comments:
-            self.comments.extend(comments)
+            for comment in comments:
+                _, *meta = comment.split(SQLGLOT_META)
+                if meta:
+                    for kv in "".join(meta).split(","):
+                        k, *v = kv.split("=")
+                        value = v[0].strip() if v else True
+                        self.meta[k.strip()] = value
+                self.comments.append(comment)
 
     def append(self, arg_key: str, value: t.Any) -> None:
         """
@@ -664,16 +674,6 @@ class Expression(metaclass=_Expression):
 
         return load(obj)
 
-
-IntoType = t.Union[
-    str,
-    t.Type[Expression],
-    t.Collection[t.Union[str, t.Type[Expression]]],
-]
-ExpOrStr = t.Union[str, Expression]
-
-
-class Condition(Expression):
     def and_(
         self,
         *expressions: t.Optional[ExpOrStr],
@@ -762,10 +762,18 @@ class Condition(Expression):
             return klass(this=other, expression=this)
         return klass(this=this, expression=other)
 
-    def __getitem__(self, other: ExpOrStr | t.Tuple[ExpOrStr]):
+    def __getitem__(self, other: ExpOrStr | t.Tuple[ExpOrStr]) -> Bracket:
         return Bracket(
             this=self.copy(), expressions=[convert(e, copy=True) for e in ensure_list(other)]
         )
+
+    def __iter__(self) -> t.Iterator:
+        if "expressions" in self.arg_types:
+            return iter(self.args.get("expressions") or [])
+        # We define this because __getitem__ converts Expression into an iterable, which is
+        # problematic because one can hit infinite loops if they do "for x in some_expr: ..."
+        # See: https://peps.python.org/pep-0234/
+        raise TypeError(f"'{self.__class__.__name__}' object is not iterable")
 
     def isin(
         self,
@@ -884,6 +892,18 @@ class Condition(Expression):
 
     def __invert__(self) -> Not:
         return not_(self.copy())
+
+
+IntoType = t.Union[
+    str,
+    t.Type[Expression],
+    t.Collection[t.Union[str, t.Type[Expression]]],
+]
+ExpOrStr = t.Union[str, Expression]
+
+
+class Condition(Expression):
+    """Logical conditions like x AND y, or simply x"""
 
 
 class Predicate(Condition):
@@ -1026,11 +1046,14 @@ class Create(DDL):
         "indexes": False,
         "no_schema_binding": False,
         "begin": False,
+        "end": False,
         "clone": False,
     }
 
 
 # https://docs.snowflake.com/en/sql-reference/sql/create-clone
+# https://cloud.google.com/bigquery/docs/reference/standard-sql/data-definition-language#create_table_clone_statement
+# https://cloud.google.com/bigquery/docs/reference/standard-sql/data-definition-language#create_table_copy
 class Clone(Expression):
     arg_types = {
         "this": True,
@@ -1038,11 +1061,16 @@ class Clone(Expression):
         "kind": False,
         "shallow": False,
         "expression": False,
+        "copy": False,
     }
 
 
 class Describe(Expression):
     arg_types = {"this": True, "kind": False, "expressions": False}
+
+
+class Kill(Expression):
+    arg_types = {"this": True, "kind": False}
 
 
 class Pragma(Expression):
@@ -1161,7 +1189,7 @@ class Column(Condition):
             if self.args.get(part)
         ]
 
-    def to_dot(self) -> Dot:
+    def to_dot(self) -> Dot | Identifier:
         """Converts the column into a dot expression."""
         parts = self.parts
         parent = self.parent
@@ -1171,7 +1199,7 @@ class Column(Condition):
                 parts.append(parent.expression)
             parent = parent.parent
 
-        return Dot.build(deepcopy(parts))
+        return Dot.build(deepcopy(parts)) if len(parts) > 1 else parts[0]
 
 
 class ColumnPosition(Expression):
@@ -1596,6 +1624,11 @@ class Identifier(Expression):
         return self.name
 
 
+# https://www.postgresql.org/docs/current/indexes-opclass.html
+class Opclass(Expression):
+    arg_types = {"this": True, "expression": True}
+
+
 class Index(Expression):
     arg_types = {
         "this": False,
@@ -1607,6 +1640,7 @@ class Index(Expression):
         "primary": False,
         "amp": False,  # teradata
         "partition_by": False,  # teradata
+        "where": False,  # postgres partial indexes
     }
 
 
@@ -2006,8 +2040,12 @@ class FreespaceProperty(Property):
     arg_types = {"this": True, "percent": False}
 
 
-class InputOutputFormat(Expression):
-    arg_types = {"input_format": False, "output_format": False}
+class InputModelProperty(Property):
+    arg_types = {"this": True}
+
+
+class OutputModelProperty(Property):
+    arg_types = {"this": True}
 
 
 class IsolatedLoadingProperty(Property):
@@ -2103,6 +2141,10 @@ class PartitionedByProperty(Property):
     arg_types = {"this": True}
 
 
+class RemoteWithConnectionModelProperty(Property):
+    arg_types = {"this": True}
+
+
 class ReturnsProperty(Property):
     arg_types = {"this": True, "is_table": False, "table": False}
 
@@ -2141,6 +2183,10 @@ class QueryTransform(Expression):
     }
 
 
+class SampleProperty(Property):
+    arg_types = {"this": True}
+
+
 class SchemaCommentProperty(Property):
     arg_types = {"this": True}
 
@@ -2171,6 +2217,10 @@ class StabilityProperty(Property):
 
 class TemporaryProperty(Property):
     arg_types = {}
+
+
+class TransformModelProperty(Property):
+    arg_types = {"expressions": True}
 
 
 class TransientProperty(Property):
@@ -2253,6 +2303,10 @@ class Properties(Expression):
 
 class Qualify(Expression):
     pass
+
+
+class InputOutputFormat(Expression):
+    arg_types = {"input_format": False, "output_format": False}
 
 
 # https://www.ibm.com/docs/en/ias?topic=procedures-return-statement-in-sql
@@ -2425,6 +2479,9 @@ class Table(Expression):
         "hints": False,
         "system_time": False,
         "version": False,
+        "format": False,
+        "pattern": False,
+        "index": False,
     }
 
     @property
@@ -2450,17 +2507,17 @@ class Table(Expression):
         return []
 
     @property
-    def parts(self) -> t.List[Identifier]:
+    def parts(self) -> t.List[Expression]:
         """Return the parts of a table in order catalog, db, table."""
-        parts: t.List[Identifier] = []
+        parts: t.List[Expression] = []
 
         for arg in ("catalog", "db", "this"):
             part = self.args.get(arg)
 
-            if isinstance(part, Identifier):
-                parts.append(part)
-            elif isinstance(part, Dot):
+            if isinstance(part, Dot):
                 parts.extend(part.flatten())
+            elif isinstance(part, Expression):
+                parts.append(part)
 
         return parts
 
@@ -2895,6 +2952,7 @@ class Select(Subqueryable):
             prefix="OFFSET",
             dialect=dialect,
             copy=copy,
+            into_arg="expression",
             **opts,
         )
 
@@ -3390,7 +3448,7 @@ class Pivot(Expression):
     arg_types = {
         "this": False,
         "alias": False,
-        "expressions": True,
+        "expressions": False,
         "field": False,
         "unpivot": False,
         "using": False,
@@ -3557,6 +3615,7 @@ class DataType(Expression):
         UINT128 = auto()
         UINT256 = auto()
         UMEDIUMINT = auto()
+        UDECIMAL = auto()
         UNIQUEIDENTIFIER = auto()
         UNKNOWN = auto()  # Sentinel value, useful for type annotation
         USERDEFINED = "USER-DEFINED"
@@ -3678,13 +3737,13 @@ class DataType(Expression):
 
 
 # https://www.postgresql.org/docs/15/datatype-pseudo.html
-class PseudoType(Expression):
-    pass
+class PseudoType(DataType):
+    arg_types = {"this": True}
 
 
 # https://www.postgresql.org/docs/15/datatype-oid.html
-class ObjectIdentifier(Expression):
-    pass
+class ObjectIdentifier(DataType):
+    arg_types = {"this": True}
 
 
 # WHERE x <OP> EXISTS|ALL|ANY|SOME(SELECT ...)
@@ -4007,20 +4066,30 @@ class TimeUnit(Expression):
 
         super().__init__(**args)
 
+    @property
+    def unit(self) -> t.Optional[Var]:
+        return self.args.get("unit")
+
+
+class IntervalOp(TimeUnit):
+    arg_types = {"unit": True, "expression": True}
+
+    def interval(self):
+        return Interval(
+            this=self.expression.copy(),
+            unit=self.unit.copy(),
+        )
+
 
 # https://www.oracletutorial.com/oracle-basics/oracle-interval/
 # https://trino.io/docs/current/language/types.html#interval-day-to-second
 # https://docs.databricks.com/en/sql/language-manual/data-types/interval-type.html
-class IntervalSpan(Expression):
+class IntervalSpan(DataType):
     arg_types = {"this": True, "expression": True}
 
 
 class Interval(TimeUnit):
     arg_types = {"this": False, "unit": False}
-
-    @property
-    def unit(self) -> t.Optional[Var]:
-        return self.args.get("unit")
 
 
 class IgnoreNulls(Expression):
@@ -4254,7 +4323,7 @@ class CastToStrType(Func):
     arg_types = {"this": True, "to": True}
 
 
-class Collate(Binary):
+class Collate(Binary, Func):
     pass
 
 
@@ -4267,6 +4336,12 @@ class Coalesce(Func):
     arg_types = {"this": True, "expressions": False}
     is_var_len_args = True
     _sql_names = ["COALESCE", "IFNULL", "NVL"]
+
+
+class Chr(Func):
+    arg_types = {"this": True, "charset": False, "expressions": False}
+    is_var_len_args = True
+    _sql_names = ["CHR", "CHAR"]
 
 
 class Concat(Func):
@@ -4311,11 +4386,11 @@ class CurrentUser(Func):
     arg_types = {"this": False}
 
 
-class DateAdd(Func, TimeUnit):
+class DateAdd(Func, IntervalOp):
     arg_types = {"this": True, "expression": True, "unit": False}
 
 
-class DateSub(Func, TimeUnit):
+class DateSub(Func, IntervalOp):
     arg_types = {"this": True, "expression": True, "unit": False}
 
 
@@ -4327,12 +4402,16 @@ class DateDiff(Func, TimeUnit):
 class DateTrunc(Func):
     arg_types = {"unit": True, "this": True, "zone": False}
 
+    @property
+    def unit(self) -> Expression:
+        return self.args["unit"]
 
-class DatetimeAdd(Func, TimeUnit):
+
+class DatetimeAdd(Func, IntervalOp):
     arg_types = {"this": True, "expression": True, "unit": False}
 
 
-class DatetimeSub(Func, TimeUnit):
+class DatetimeSub(Func, IntervalOp):
     arg_types = {"this": True, "expression": True, "unit": False}
 
 
@@ -4354,6 +4433,10 @@ class DayOfMonth(Func):
 
 class DayOfYear(Func):
     _sql_names = ["DAY_OF_YEAR", "DAYOFYEAR"]
+
+
+class ToDays(Func):
+    pass
 
 
 class WeekOfYear(Func):
@@ -4711,6 +4794,11 @@ class Nvl2(Func):
 
 class Posexplode(Func):
     pass
+
+
+# https://cloud.google.com/bigquery/docs/reference/standard-sql/bigqueryml-syntax-predict#mlpredict_function
+class Predict(Func):
+    arg_types = {"this": True, "expression": True, "params_struct": False}
 
 
 class Pow(Binary, Func):
@@ -5930,7 +6018,10 @@ def cast(expression: ExpOrStr, to: str | DataType | DataType.Type, **opts) -> Ca
         The new Cast instance.
     """
     expression = maybe_parse(expression, **opts)
-    return Cast(this=expression, to=DataType.build(to, **opts))
+    data_type = DataType.build(to, **opts)
+    expression = Cast(this=expression, to=data_type)
+    expression.type = data_type
+    return expression
 
 
 def table_(
@@ -6140,7 +6231,7 @@ def table_name(table: Table | str, dialect: DialectType = None) -> str:
         The table name.
     """
 
-    table = maybe_parse(table, into=Table)
+    table = maybe_parse(table, into=Table, dialect=dialect)
 
     if not table:
         raise ValueError(f"Cannot parse {table}")

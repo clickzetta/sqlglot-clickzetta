@@ -1,3 +1,4 @@
+from sqlglot import transpile
 from tests.dialects.test_dialect import Validator
 
 
@@ -5,6 +6,11 @@ class TestRedshift(Validator):
     dialect = "redshift"
 
     def test_redshift(self):
+        self.validate_identity(
+            "SELECT 'a''b'",
+            "SELECT 'a\\'b'",
+        )
+
         self.validate_all(
             "x ~* 'pat'",
             write={
@@ -225,7 +231,6 @@ class TestRedshift(Validator):
         self.validate_identity("SELECT * FROM #x")
         self.validate_identity("SELECT INTERVAL '5 day'")
         self.validate_identity("foo$")
-        self.validate_identity("$foo")
         self.validate_identity("CAST('bla' AS SUPER)")
         self.validate_identity("CREATE TABLE real1 (realcol REAL)")
         self.validate_identity("CAST('foo' AS HLLSKETCH)")
@@ -268,8 +273,44 @@ class TestRedshift(Validator):
             "SELECT DATE_ADD('day', 1, DATE('2023-01-01'))",
             "SELECT DATEADD(day, 1, CAST(DATE('2023-01-01') AS DATE))",
         )
+        self.validate_identity(
+            """SELECT
+  c_name,
+  orders.o_orderkey AS orderkey,
+  index AS orderkey_index
+FROM customer_orders_lineitem AS c, c.c_orders AS orders AT index
+ORDER BY
+  orderkey_index""",
+            pretty=True,
+        )
+        self.validate_identity(
+            "SELECT attr AS attr, JSON_TYPEOF(val) AS value_type FROM customer_orders_lineitem AS c, UNPIVOT c.c_orders[0] WHERE c_custkey = 9451"
+        )
+        self.validate_identity(
+            "SELECT attr AS attr, JSON_TYPEOF(val) AS value_type FROM customer_orders_lineitem AS c, UNPIVOT c.c_orders AS val AT attr WHERE c_custkey = 9451"
+        )
 
     def test_values(self):
+        # Test crazy-sized VALUES clause to UNION ALL conversion to ensure we don't get RecursionError
+        values = [str(v) for v in range(0, 10000)]
+        values_query = f"SELECT * FROM (VALUES {', '.join('(' + v + ')' for v in values)})"
+        union_query = f"SELECT * FROM ({' UNION ALL '.join('SELECT ' + v for v in values)})"
+        self.assertEqual(transpile(values_query, write="redshift")[0], union_query)
+
+        self.validate_identity(
+            "SELECT * FROM (VALUES (1), (2))",
+            """SELECT
+  *
+FROM (
+  SELECT
+    1
+  UNION ALL
+  SELECT
+    2
+)""",
+            pretty=True,
+        )
+
         self.validate_all(
             "SELECT * FROM (VALUES (1, 2)) AS t",
             write={
@@ -291,9 +332,9 @@ class TestRedshift(Validator):
             },
         )
         self.validate_all(
-            "SELECT a, b FROM (VALUES (1, 2), (3, 4)) AS t (a, b)",
+            'SELECT a, b FROM (VALUES (1, 2), (3, 4)) AS "t" (a, b)',
             write={
-                "redshift": "SELECT a, b FROM (SELECT 1 AS a, 2 AS b UNION ALL SELECT 3, 4) AS t",
+                "redshift": 'SELECT a, b FROM (SELECT 1 AS a, 2 AS b UNION ALL SELECT 3, 4) AS "t"',
             },
         )
         self.validate_all(
@@ -319,6 +360,16 @@ class TestRedshift(Validator):
             write={
                 "redshift": "INSERT INTO t (a, b) VALUES (1, 2), (3, 4)",
             },
+        )
+        self.validate_identity(
+            'SELECT * FROM (VALUES (1)) AS "t"(a)',
+            '''SELECT
+  *
+FROM (
+  SELECT
+    1 AS a
+) AS "t"''',
+            pretty=True,
         )
 
     def test_create_table_like(self):

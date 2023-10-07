@@ -300,7 +300,6 @@ class TestPresto(Validator):
             write={
                 "presto": "DATE_ADD('DAY', 1 * -1, x)",
             },
-            read={"mysql": "DATE_SUB(x, INTERVAL 1 DAY)"},
         )
         self.validate_all(
             "NOW()",
@@ -351,6 +350,12 @@ class TestPresto(Validator):
             write={
                 "spark": "SELECT FROM_UTC_TIMESTAMP(CAST('2012-10-31 00:00' AS TIMESTAMP), 'America/Sao_Paulo')",
                 "presto": "SELECT CAST('2012-10-31 00:00' AS TIMESTAMP) AT TIME ZONE 'America/Sao_Paulo'",
+            },
+        )
+        self.validate_all(
+            "CAST('2012-10-31 00:00' AS TIMESTAMP) AT TIME ZONE 'America/Sao_Paulo'",
+            read={
+                "spark": "FROM_UTC_TIMESTAMP('2012-10-31 00:00', 'America/Sao_Paulo')",
             },
         )
         self.validate_all(
@@ -503,6 +508,7 @@ class TestPresto(Validator):
 
     @mock.patch("sqlglot.helper.logger")
     def test_presto(self, logger):
+        self.validate_identity("string_agg(x, ',')", "ARRAY_JOIN(ARRAY_AGG(x), ',')")
         self.validate_identity(
             "SELECT * FROM example.testdb.customer_orders FOR VERSION AS OF 8954597067493422955"
         )

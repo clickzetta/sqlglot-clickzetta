@@ -14,6 +14,13 @@ class TestExpressions(unittest.TestCase):
     def test_depth(self):
         self.assertEqual(parse_one("x(1)").find(exp.Literal).depth, 1)
 
+    def test_iter(self):
+        self.assertEqual([exp.Literal.number(1), exp.Literal.number(2)], list(parse_one("[1, 2]")))
+
+        with self.assertRaises(TypeError):
+            for x in parse_one("1"):
+                pass
+
     def test_eq(self):
         self.assertNotEqual(exp.to_identifier("a"), exp.to_identifier("A"))
 
@@ -175,16 +182,21 @@ class TestExpressions(unittest.TestCase):
         self.assertEqual(parse_one("a.b.c").name, "c")
 
     def test_table_name(self):
+        bq_dashed_table = exp.to_table("a-1.b.c", dialect="bigquery")
+        self.assertEqual(exp.table_name(bq_dashed_table), '"a-1".b.c')
+        self.assertEqual(exp.table_name(bq_dashed_table, dialect="bigquery"), "`a-1`.b.c")
+        self.assertEqual(exp.table_name("a-1.b.c", dialect="bigquery"), "`a-1`.b.c")
         self.assertEqual(exp.table_name(parse_one("a", into=exp.Table)), "a")
         self.assertEqual(exp.table_name(parse_one("a.b", into=exp.Table)), "a.b")
         self.assertEqual(exp.table_name(parse_one("a.b.c", into=exp.Table)), "a.b.c")
         self.assertEqual(exp.table_name("a.b.c"), "a.b.c")
+        self.assertEqual(exp.table_name(exp.to_table("a.b.c.d.e", dialect="bigquery")), "a.b.c.d.e")
+        self.assertEqual(exp.table_name(exp.to_table("'@foo'", dialect="snowflake")), "'@foo'")
+        self.assertEqual(exp.table_name(exp.to_table("@foo", dialect="snowflake")), "@foo")
         self.assertEqual(
             exp.table_name(parse_one("foo.`{bar,er}`", read="databricks"), dialect="databricks"),
             "foo.`{bar,er}`",
         )
-        self.assertEqual(exp.table_name(exp.to_table("a-1.b.c", dialect="bigquery")), '"a-1".b.c')
-        self.assertEqual(exp.table_name(exp.to_table("a.b.c.d.e", dialect="bigquery")), "a.b.c.d.e")
 
     def test_table(self):
         self.assertEqual(exp.table_("a", alias="b"), parse_one("select * from a b").find(exp.Table))
@@ -939,3 +951,8 @@ FROM foo""",
 
         with self.assertRaises(ParseError):
             exp.DataType.build("foo")
+
+    def test_set_meta(self):
+        query = parse_one("SELECT * FROM foo /* sqlglot.meta x = 1, y = a, z */")
+        self.assertEqual(query.find(exp.Table).meta, {"x": "1", "y": "a", "z": True})
+        self.assertEqual(query.sql(), "SELECT * FROM foo /* sqlglot.meta x = 1, y = a, z */")
