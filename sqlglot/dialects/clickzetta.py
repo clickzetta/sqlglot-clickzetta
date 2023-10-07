@@ -59,6 +59,7 @@ class ClickZetta(Spark):
             exp.DataType.Type.USMALLINT: "SMALLINT",
             exp.DataType.Type.UMEDIUMINT: "INT",
             exp.DataType.Type.UBIGINT: "BIGINT",
+            exp.DataType.Type.UDECIMAL: "DECIMAL",
         }
 
         TRANSFORMS = {
