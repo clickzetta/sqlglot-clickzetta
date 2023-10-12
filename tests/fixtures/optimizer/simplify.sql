@@ -625,7 +625,7 @@ t0.x = t1.x AND t0.y < t1.y AND t0.y <= t1.y;
 t0.x = t1.x AND t0.y < t1.y AND t0.y <= t1.y;
 
 --------------------------------------
--- Coalesce
+-- COALESCE
 --------------------------------------
 COALESCE(x);
 x;
@@ -669,17 +669,44 @@ a AND b AND (ROW() OVER () = 1 OR ROW() OVER () IS NULL);
 CONCAT(x, y);
 CONCAT(x, y);
 
+CONCAT_WS(sep, x, y);
+CONCAT_WS(sep, x, y);
+
 CONCAT(x);
 x;
 
 CONCAT('a', 'b', 'c');
 'abc';
 
+CONCAT('a', NULL);
+CONCAT('a', NULL);
+
+CONCAT_WS('-', 'a', 'b', 'c');
+'a-b-c';
+
 CONCAT('a', x, y, 'b', 'c');
 CONCAT('a', x, y, 'bc');
 
+CONCAT_WS('-', 'a', x, y, 'b', 'c');
+CONCAT_WS('-', 'a', x, y, 'b-c');
+
 'a' || 'b';
 'ab';
+
+CONCAT_WS('-', 'a');
+'a';
+
+CONCAT_WS('-', x, y);
+CONCAT_WS('-', x, y);
+
+CONCAT_WS('', x, y);
+CONCAT_WS('', x, y);
+
+CONCAT_WS('-', x);
+CONCAT_WS('-', x);
+
+CONCAT_WS(sep, 'a', 'b');
+CONCAT_WS(sep, 'a', 'b');
 
 'a' || 'b' || x;
 CONCAT('ab', x);
@@ -837,3 +864,60 @@ x < CAST('2020-01-07' AS DATE);
 
 x - INTERVAL '1' day = CAST(y AS DATE);
 x - INTERVAL '1' day = CAST(y AS DATE);
+
+--------------------------------------
+-- Constant Propagation
+--------------------------------------
+x = 5 AND y = x;
+x = 5 AND y = 5;
+
+5 = x AND y = x;
+y = 5 AND 5 = x;
+
+x = 5 OR y = x;
+x = 5 OR y = x;
+
+(x = 5 AND y = x) OR y = 1;
+(x = 5 AND y = 5) OR y = 1;
+
+t.x = 5 AND y = x;
+t.x = 5 AND y = x;
+
+t.x = 'a' AND y = CONCAT_WS('-', t.x, 'b');
+t.x = 'a' AND y = 'a-b';
+
+x = 5 AND y = x AND y + 1 < 5;
+FALSE;
+
+x = 5 AND x = 6;
+FALSE;
+
+x = 5 AND (y = x OR z = 1);
+x = 5 AND (y = x OR z = 1);
+
+x = 5 AND x + 3 = 8;
+x = 5;
+
+x = 5 AND (SELECT x FROM t WHERE y = 1);
+x = 5 AND (SELECT x FROM t WHERE y = 1);
+
+x = 1 AND y > 0 AND (SELECT z = 5 FROM t WHERE y = 1);
+x = 1 AND y > 0 AND (SELECT z = 5 FROM t WHERE y = 1);
+
+x = 1 AND x = y AND (SELECT z FROM t WHERE a AND (b OR c));
+x = 1 AND (SELECT z FROM t WHERE a AND (b OR c)) AND 1 = y;
+
+t1.a = 39 AND t2.b = t1.a AND t3.c = t2.b;
+t1.a = 39 AND t2.b = 39 AND t3.c = 39;
+
+x = 1 AND CASE WHEN x = 5 THEN FALSE ELSE TRUE END;
+x = 1 AND CASE WHEN FALSE THEN FALSE ELSE TRUE END;
+
+x = 1 AND IF(x = 5, FALSE, TRUE);
+x = 1 AND CASE WHEN FALSE THEN FALSE ELSE TRUE END;
+
+x = y AND CASE WHEN x = 5 THEN FALSE ELSE TRUE END;
+x = y AND CASE WHEN x = 5 THEN FALSE ELSE TRUE END;
+
+x = 1 AND CASE WHEN y = 5 THEN x = z END;
+x = 1 AND CASE WHEN y = 5 THEN 1 = z END;

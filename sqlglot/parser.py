@@ -795,17 +795,18 @@ class Parser(metaclass=_Parser):
         "DECODE": lambda self: self._parse_decode(),
         "EXTRACT": lambda self: self._parse_extract(),
         "JSON_OBJECT": lambda self: self._parse_json_object(),
+        "JSON_TABLE": lambda self: self._parse_json_table(),
         "LOG": lambda self: self._parse_logarithm(),
         "MATCH": lambda self: self._parse_match_against(),
         "OPENJSON": lambda self: self._parse_open_json(),
         "POSITION": lambda self: self._parse_position(),
         "PREDICT": lambda self: self._parse_predict(),
-        "SAFE_CAST": lambda self: self._parse_cast(False),
+        "SAFE_CAST": lambda self: self._parse_cast(False, safe=True),
         "STRING_AGG": lambda self: self._parse_string_agg(),
         "SUBSTRING": lambda self: self._parse_substring(),
         "TRIM": lambda self: self._parse_trim(),
-        "TRY_CAST": lambda self: self._parse_cast(False),
-        "TRY_CONVERT": lambda self: self._parse_convert(False),
+        "TRY_CAST": lambda self: self._parse_cast(False, safe=True),
+        "TRY_CONVERT": lambda self: self._parse_convert(False, safe=True),
     }
 
     QUERY_MODIFIER_PARSERS = {
@@ -4140,7 +4141,7 @@ class Parser(metaclass=_Parser):
 
         return self.expression(exp.AnyValue, this=this, having=having, max=is_max)
 
-    def _parse_cast(self, strict: bool) -> exp.Expression:
+    def _parse_cast(self, strict: bool, safe: t.Optional[bool] = None) -> exp.Expression:
         this = self._parse_conjunction()
 
         if not self._match(TokenType.ALIAS):
@@ -4181,7 +4182,9 @@ class Parser(metaclass=_Parser):
 
                 return this
 
-        return self.expression(exp.Cast if strict else exp.TryCast, this=this, to=to, format=fmt)
+        return self.expression(
+            exp.Cast if strict else exp.TryCast, this=this, to=to, format=fmt, safe=safe
+        )
 
     def _parse_concat(self) -> t.Optional[exp.Expression]:
         args = self._parse_csv(self._parse_conjunction)
@@ -4235,7 +4238,9 @@ class Parser(metaclass=_Parser):
         order = self._parse_order(this=seq_get(args, 0))
         return self.expression(exp.GroupConcat, this=order, separator=seq_get(args, 1))
 
-    def _parse_convert(self, strict: bool) -> t.Optional[exp.Expression]:
+    def _parse_convert(
+        self, strict: bool, safe: t.Optional[bool] = None
+    ) -> t.Optional[exp.Expression]:
         this = self._parse_bitwise()
 
         if self._match(TokenType.USING):
@@ -4247,7 +4252,7 @@ class Parser(metaclass=_Parser):
         else:
             to = None
 
-        return self.expression(exp.Cast if strict else exp.TryCast, this=this, to=to)
+        return self.expression(exp.Cast if strict else exp.TryCast, this=this, to=to, safe=safe)
 
     def _parse_decode(self) -> t.Optional[exp.Decode | exp.Case]:
         """
@@ -4350,6 +4355,50 @@ class Parser(metaclass=_Parser):
             unique_keys=unique_keys,
             return_type=return_type,
             encoding=encoding,
+        )
+
+    # Note: this is currently incomplete; it only implements the "JSON_value_column" part
+    def _parse_json_column_def(self) -> exp.JSONColumnDef:
+        if not self._match_text_seq("NESTED"):
+            this = self._parse_id_var()
+            kind = self._parse_types(allow_identifiers=False)
+            nested = None
+        else:
+            this = None
+            kind = None
+            nested = True
+
+        path = self._match_text_seq("PATH") and self._parse_string()
+        nested_schema = nested and self._parse_json_schema()
+
+        return self.expression(
+            exp.JSONColumnDef,
+            this=this,
+            kind=kind,
+            path=path,
+            nested_schema=nested_schema,
+        )
+
+    def _parse_json_schema(self) -> exp.JSONSchema:
+        self._match_text_seq("COLUMNS")
+        return self.expression(
+            exp.JSONSchema,
+            expressions=self._parse_wrapped_csv(self._parse_json_column_def, optional=True),
+        )
+
+    def _parse_json_table(self) -> exp.JSONTable:
+        this = self._parse_format_json(self._parse_bitwise())
+        path = self._match(TokenType.COMMA) and self._parse_string()
+        error_handling = self._parse_on_handling("ERROR", "ERROR", "NULL")
+        empty_handling = self._parse_on_handling("EMPTY", "ERROR", "NULL")
+        schema = self._parse_json_schema()
+
+        return exp.JSONTable(
+            this=this,
+            schema=schema,
+            path=path,
+            error_handling=error_handling,
+            empty_handling=empty_handling,
         )
 
     def _parse_logarithm(self) -> exp.Func:

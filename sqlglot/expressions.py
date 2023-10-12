@@ -487,7 +487,7 @@ class Expression(metaclass=_Expression):
         """
         for node, _, _ in self.dfs(prune=lambda n, p, *_: p and not type(n) is self.__class__):
             if not type(node) is self.__class__:
-                yield node.unnest() if unnest else node
+                yield node.unnest() if unnest and not isinstance(node, Subquery) else node
 
     def __str__(self) -> str:
         return self.sql()
@@ -4286,7 +4286,7 @@ class Case(Func):
 
 
 class Cast(Func):
-    arg_types = {"this": True, "to": True, "format": False}
+    arg_types = {"this": True, "to": True, "format": False, "safe": False}
 
     @property
     def name(self) -> str:
@@ -4538,6 +4538,18 @@ class Explode(Func):
     pass
 
 
+class ExplodeOuter(Explode):
+    pass
+
+
+class Posexplode(Explode):
+    pass
+
+
+class PosexplodeOuter(Posexplode):
+    pass
+
+
 class Floor(Func):
     arg_types = {"this": True, "decimals": False}
 
@@ -4623,14 +4635,18 @@ class JSONArrayAgg(Func):
 # https://docs.oracle.com/en/database/oracle/oracle-database/19/sqlrf/JSON_TABLE.html
 # Note: parsing of JSON column definitions is currently incomplete.
 class JSONColumnDef(Expression):
-    arg_types = {"this": True, "kind": False, "path": False}
+    arg_types = {"this": False, "kind": False, "path": False, "nested_schema": False}
+
+
+class JSONSchema(Expression):
+    arg_types = {"expressions": True}
 
 
 # # https://docs.oracle.com/en/database/oracle/oracle-database/19/sqlrf/JSON_TABLE.html
 class JSONTable(Func):
     arg_types = {
         "this": True,
-        "expressions": True,
+        "schema": True,
         "path": False,
         "error_handling": False,
         "empty_handling": False,
@@ -4790,10 +4806,6 @@ class Month(Func):
 
 class Nvl2(Func):
     arg_types = {"this": True, "true": True, "false": False}
-
-
-class Posexplode(Func):
-    pass
 
 
 # https://cloud.google.com/bigquery/docs/reference/standard-sql/bigqueryml-syntax-predict#mlpredict_function

@@ -45,6 +45,10 @@ def normalize(expression, **kwargs):
     return optimizer.simplify.simplify(expression)
 
 
+def simplify(expression, **kwargs):
+    return optimizer.simplify.simplify(expression, constant_propagation=True, **kwargs)
+
+
 class TestOptimizer(unittest.TestCase):
     maxDiff = None
 
@@ -271,7 +275,7 @@ class TestOptimizer(unittest.TestCase):
         self.check_file("pushdown_projections", pushdown_projections, schema=self.schema)
 
     def test_simplify(self):
-        self.check_file("simplify", optimizer.simplify.simplify)
+        self.check_file("simplify", simplify)
 
         expression = parse_one("TRUE AND TRUE AND TRUE")
         self.assertEqual(exp.true(), optimizer.simplify.simplify(expression))
@@ -822,6 +826,11 @@ FROM READ_CSV('tests/fixtures/optimizer/tpc-h/nation.csv.gz', 'delimiter', '|') 
         )
         self.assertEqual(exp.DataType.Type.ARRAY, expression.selects[0].type.this)
         self.assertEqual(expression.selects[0].type.sql(), "ARRAY<INT>")
+
+        schema = MappingSchema({"t": {"c": "STRUCT<`f` STRING>"}}, dialect="bigquery")
+        expression = annotate_types(parse_one("SELECT t.c FROM t"), schema=schema)
+
+        self.assertEqual(expression.selects[0].type.sql(dialect="bigquery"), "STRUCT<`f` STRING>")
 
     def test_type_annotation_cache(self):
         sql = "SELECT 1 + 1"
