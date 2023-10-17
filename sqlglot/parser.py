@@ -160,6 +160,9 @@ class Parser(metaclass=_Parser):
         TokenType.TIME,
         TokenType.TIMETZ,
         TokenType.TIMESTAMP,
+        TokenType.TIMESTAMP_S,
+        TokenType.TIMESTAMP_MS,
+        TokenType.TIMESTAMP_NS,
         TokenType.TIMESTAMPTZ,
         TokenType.TIMESTAMPLTZ,
         TokenType.DATETIME,
@@ -2952,6 +2955,7 @@ class Parser(metaclass=_Parser):
             cube = None
             totals = None
 
+            index = self._index
             with_ = self._match(TokenType.WITH)
             if self._match(TokenType.ROLLUP):
                 rollup = with_ or self._parse_wrapped_csv(self._parse_column)
@@ -2966,6 +2970,8 @@ class Parser(metaclass=_Parser):
                 elements["totals"] = True  # type: ignore
 
             if not (grouping_sets or rollup or cube or totals):
+                if with_:
+                    self._retreat(index)
                 break
 
         return self.expression(exp.Group, **elements)  # type: ignore
@@ -5027,7 +5033,17 @@ class Parser(metaclass=_Parser):
         self._match(TokenType.ON)
         on = self._parse_conjunction()
 
+        return self.expression(
+            exp.Merge,
+            this=target,
+            using=using,
+            on=on,
+            expressions=self._parse_when_matched(),
+        )
+
+    def _parse_when_matched(self) -> t.List[exp.When]:
         whens = []
+
         while self._match(TokenType.WHEN):
             matched = not self._match(TokenType.NOT)
             self._match_text_seq("MATCHED")
@@ -5074,14 +5090,7 @@ class Parser(metaclass=_Parser):
                     then=then,
                 )
             )
-
-        return self.expression(
-            exp.Merge,
-            this=target,
-            using=using,
-            on=on,
-            expressions=whens,
-        )
+        return whens
 
     def _parse_show(self) -> t.Optional[exp.Expression]:
         parser = self._find_parser(self.SHOW_PARSERS, self.SHOW_TRIE)

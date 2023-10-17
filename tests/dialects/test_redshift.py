@@ -7,6 +7,21 @@ class TestRedshift(Validator):
 
     def test_redshift(self):
         self.validate_identity(
+            "CREATE OR REPLACE VIEW v1 AS SELECT id, AVG(average_metric1) AS m1, AVG(average_metric2) AS m2 FROM t GROUP BY id WITH NO SCHEMA BINDING"
+        )
+        self.validate_all(
+            "SELECT APPROXIMATE COUNT(DISTINCT y)",
+            read={
+                "spark": "SELECT APPROX_COUNT_DISTINCT(y)",
+            },
+            write={
+                "redshift": "SELECT APPROXIMATE COUNT(DISTINCT y)",
+                "spark": "SELECT APPROX_COUNT_DISTINCT(y)",
+            },
+        )
+        self.validate_identity("SELECT APPROXIMATE AS y")
+
+        self.validate_identity(
             "SELECT 'a''b'",
             "SELECT 'a\\'b'",
         )

@@ -6,6 +6,20 @@ class TestClickhouse(Validator):
     dialect = "clickhouse"
 
     def test_clickhouse(self):
+        self.validate_all(
+            "has([1], x)",
+            read={
+                "postgres": "x = any(array[1])",
+            },
+        )
+        self.validate_all(
+            "NOT has([1], x)",
+            read={
+                "postgres": "any(array[1]) <> x",
+            },
+        )
+        self.validate_identity("x = y")
+
         string_types = [
             "BLOB",
             "LONGBLOB",
@@ -85,6 +99,18 @@ class TestClickhouse(Validator):
             "CREATE MATERIALIZED VIEW test_view (id UInt8) TO db.table1 AS SELECT * FROM test_data"
         )
 
+        self.validate_all(
+            "SELECT match('ThOmAs', CONCAT('(?i)', 'thomas'))",
+            read={
+                "postgres": "SELECT 'ThOmAs' ~* 'thomas'",
+            },
+        )
+        self.validate_all(
+            "SELECT match('ThOmAs', CONCAT('(?i)', x)) FROM t",
+            read={
+                "postgres": "SELECT 'ThOmAs' ~* x FROM t",
+            },
+        )
         self.validate_all(
             "SELECT '\\0'",
             read={

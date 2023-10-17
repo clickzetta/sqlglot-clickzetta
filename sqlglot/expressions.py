@@ -120,14 +120,14 @@ class Expression(metaclass=_Expression):
         return hash((self.__class__, self.hashable_args))
 
     @property
-    def this(self):
+    def this(self) -> t.Any:
         """
         Retrieves the argument with key "this".
         """
         return self.args.get("this")
 
     @property
-    def expression(self):
+    def expression(self) -> t.Any:
         """
         Retrieves the argument with key "expression".
         """
@@ -2107,7 +2107,7 @@ class LockingProperty(Property):
     arg_types = {
         "this": False,
         "kind": True,
-        "for_or_in": True,
+        "for_or_in": False,
         "lock_type": True,
         "override": False,
     }
@@ -2607,11 +2607,11 @@ class Union(Subqueryable):
         return self.this.unnest().selects
 
     @property
-    def left(self):
+    def left(self) -> Expression:
         return self.this
 
     @property
-    def right(self):
+    def right(self) -> Expression:
         return self.expression
 
 
@@ -3605,6 +3605,9 @@ class DataType(Expression):
         TIMESTAMP = auto()
         TIMESTAMPLTZ = auto()
         TIMESTAMPTZ = auto()
+        TIMESTAMP_S = auto()
+        TIMESTAMP_MS = auto()
+        TIMESTAMP_NS = auto()
         TINYINT = auto()
         TSMULTIRANGE = auto()
         TSRANGE = auto()
@@ -3661,6 +3664,9 @@ class DataType(Expression):
         Type.TIMESTAMP,
         Type.TIMESTAMPTZ,
         Type.TIMESTAMPLTZ,
+        Type.TIMESTAMP_S,
+        Type.TIMESTAMP_MS,
+        Type.TIMESTAMP_NS,
         Type.DATE,
         Type.DATETIME,
         Type.DATETIME64,
@@ -3798,11 +3804,11 @@ class Binary(Condition):
     arg_types = {"this": True, "expression": True}
 
     @property
-    def left(self):
+    def left(self) -> Expression:
         return self.this
 
     @property
-    def right(self):
+    def right(self) -> Expression:
         return self.expression
 
 
@@ -4873,7 +4879,7 @@ class RegexpLike(Binary, Func):
     arg_types = {"this": True, "expression": True, "flag": False}
 
 
-class RegexpILike(Func):
+class RegexpILike(Binary, Func):
     arg_types = {"this": True, "expression": True, "flag": False}
 
 
