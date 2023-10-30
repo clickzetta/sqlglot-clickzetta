@@ -30,8 +30,10 @@ def _groupconcat_to_wmconcat(self: ClickZetta.Generator, expression: exp.GroupCo
 
 def _anonymous_func(self: ClickZetta.Generator, expression: exp.Anonymous) -> str:
     # in MaxCompute, datetime(col) is a alias of cast(col as datetime)
-    if expression.this == 'DATETIME':
+    if expression.this.upper() == 'DATETIME':
         return f"{self.sql(expression.expressions[0])}::TIMESTAMP"
+    elif expression.this.upper() == 'GETDATE':
+        return f"CURRENT_TIMESTAMP()"
 
     # return as it is
     args = ", ".join(self.sql(e) for e in expression.expressions)
@@ -107,3 +109,12 @@ class ClickZetta(Spark):
                }:
                 return type_sql
             return super().datatype_sql(expression)
+
+        def tochar_sql(self, expression: exp.ToChar) -> str:
+            this = expression.args.get('this')
+            format = expression.args.get('format')
+            if format:
+                format_str = str(format).replace('mm', 'MM').replace('mi', 'mm')
+                return f"DATE_FORMAT({self.sql(this)}, {self.sql(format_str)})"
+
+            return super().tochar_sql(expression)
