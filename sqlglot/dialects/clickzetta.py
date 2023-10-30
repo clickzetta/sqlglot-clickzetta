@@ -28,6 +28,15 @@ def _groupconcat_to_wmconcat(self: ClickZetta.Generator, expression: exp.GroupCo
         sep = exp.Literal.string(',')
     return f"WM_CONCAT({sep}, {self.sql(this)})"
 
+def _anonymous_func(self: ClickZetta.Generator, expression: exp.Anonymous) -> str:
+    # in MaxCompute, datetime(col) is a alias of cast(col as datetime)
+    if expression.this == 'DATETIME':
+        return f"{self.sql(expression.expressions[0])}::TIMESTAMP"
+
+    # return as it is
+    args = ", ".join(self.sql(e) for e in expression.expressions)
+    return f"{expression.this}({args})"
+
 class ClickZetta(Spark):
 
     NULL_ORDERING = "nulls_are_small"
@@ -73,6 +82,7 @@ class ClickZetta(Spark):
             exp.GroupConcat: _groupconcat_to_wmconcat,
             exp.AesDecrypt: rename_func("AES_DECRYPT_MYSQL"),
             exp.CurrentTime: lambda self, e: "DATE_FORMAT(NOW(),'HH:mm:ss')",
+            exp.Anonymous: _anonymous_func,
         }
 
         def datatype_sql(self, expression: exp.DataType) -> str:
