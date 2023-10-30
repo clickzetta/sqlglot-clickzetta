@@ -6,6 +6,7 @@ from sqlglot import exp, generator, parser, tokens
 from sqlglot.dialects.dialect import (
     Dialect,
     approx_count_distinct_sql,
+    arg_max_or_min_no_count,
     arrow_json_extract_scalar_sql,
     arrow_json_extract_sql,
     binary_from_function,
@@ -18,9 +19,9 @@ from sqlglot.dialects.dialect import (
     no_comment_column_constraint_sql,
     no_properties_sql,
     no_safe_divide_sql,
+    no_timestamp_sql,
     pivot_column_names,
     regexp_extract_sql,
-    regexp_replace_sql,
     rename_func,
     str_position_sql,
     str_to_time_sql,
@@ -35,14 +36,14 @@ from sqlglot.tokens import TokenType
 def _ts_or_ds_add_sql(self: DuckDB.Generator, expression: exp.TsOrDsAdd) -> str:
     this = self.sql(expression, "this")
     unit = self.sql(expression, "unit").strip("'") or "DAY"
-    return f"CAST({this} AS DATE) + {self.sql(exp.Interval(this=expression.expression.copy(), unit=unit))}"
+    return f"CAST({this} AS DATE) + {self.sql(exp.Interval(this=expression.expression, unit=unit))}"
 
 
 def _date_delta_sql(self: DuckDB.Generator, expression: exp.DateAdd | exp.DateSub) -> str:
     this = self.sql(expression, "this")
     unit = self.sql(expression, "unit").strip("'") or "DAY"
     op = "+" if isinstance(expression, exp.DateAdd) else "-"
-    return f"{this} {op} {self.sql(exp.Interval(this=expression.expression.copy(), unit=unit))}"
+    return f"{this} {op} {self.sql(exp.Interval(this=expression.expression, unit=unit))}"
 
 
 # BigQuery -> DuckDB conversion for the DATE function
@@ -172,6 +173,12 @@ class DuckDB(Dialect):
                 this=seq_get(args, 0), expression=seq_get(args, 1), group=seq_get(args, 2)
             ),
             "REGEXP_MATCHES": exp.RegexpLike.from_arg_list,
+            "REGEXP_REPLACE": lambda args: exp.RegexpReplace(
+                this=seq_get(args, 0),
+                expression=seq_get(args, 1),
+                replacement=seq_get(args, 2),
+                modifiers=seq_get(args, 3),
+            ),
             "STRFTIME": format_time_lambda(exp.TimeToStr, "duckdb"),
             "STRING_SPLIT": exp.Split.from_arg_list,
             "STRING_SPLIT_REGEX": exp.RegexpSplit.from_arg_list,
@@ -243,6 +250,8 @@ class DuckDB(Dialect):
             if e.expressions and e.expressions[0].find(exp.Select)
             else inline_array_sql(self, e),
             exp.ArraySize: rename_func("ARRAY_LENGTH"),
+            exp.ArgMax: arg_max_or_min_no_count("ARG_MAX"),
+            exp.ArgMin: arg_max_or_min_no_count("ARG_MIN"),
             exp.ArraySort: _array_sort_sql,
             exp.ArraySum: rename_func("LIST_SUM"),
             exp.BitwiseXor: rename_func("XOR"),
@@ -287,7 +296,13 @@ class DuckDB(Dialect):
             exp.PercentileDisc: rename_func("QUANTILE_DISC"),
             exp.Properties: no_properties_sql,
             exp.RegexpExtract: regexp_extract_sql,
-            exp.RegexpReplace: regexp_replace_sql,
+            exp.RegexpReplace: lambda self, e: self.func(
+                "REGEXP_REPLACE",
+                e.this,
+                e.expression,
+                e.args.get("replacement"),
+                e.args.get("modifiers"),
+            ),
             exp.RegexpLike: rename_func("REGEXP_MATCHES"),
             exp.RegexpSplit: rename_func("STR_SPLIT_REGEX"),
             exp.SafeDivide: no_safe_divide_sql,
@@ -298,6 +313,7 @@ class DuckDB(Dialect):
             exp.StrToTime: str_to_time_sql,
             exp.StrToUnix: lambda self, e: f"EPOCH(STRPTIME({self.sql(e, 'this')}, {self.format_time(e)}))",
             exp.Struct: _struct_sql,
+            exp.Timestamp: no_timestamp_sql,
             exp.TimestampTrunc: timestamptrunc_sql,
             exp.TimeStrToDate: lambda self, e: f"CAST({self.sql(e, 'this')} AS DATE)",
             exp.TimeStrToTime: timestrtotime_sql,
@@ -349,7 +365,7 @@ class DuckDB(Dialect):
                 multiplier = 90
 
             if multiplier:
-                return f"({multiplier} * {super().interval_sql(exp.Interval(this=expression.this.copy(), unit=exp.var('day')))})"
+                return f"({multiplier} * {super().interval_sql(exp.Interval(this=expression.this, unit=exp.var('day')))})"
 
             return super().interval_sql(expression)
 

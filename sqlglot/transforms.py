@@ -67,7 +67,7 @@ def eliminate_distinct_on(expression: exp.Expression) -> exp.Expression:
         order = expression.args.get("order")
 
         if order:
-            window.set("order", order.pop().copy())
+            window.set("order", order.pop())
         else:
             window.set("order", exp.Order(expressions=[c.copy() for c in distinct_cols]))
 
@@ -75,9 +75,9 @@ def eliminate_distinct_on(expression: exp.Expression) -> exp.Expression:
         expression.select(window, copy=False)
 
         return (
-            exp.select(*outer_selects)
-            .from_(expression.subquery("_t"))
-            .where(exp.column(row_number).eq(1))
+            exp.select(*outer_selects, copy=False)
+            .from_(expression.subquery("_t", copy=False), copy=False)
+            .where(exp.column(row_number).eq(1), copy=False)
         )
 
     return expression
@@ -120,7 +120,9 @@ def eliminate_qualify(expression: exp.Expression) -> exp.Expression:
             elif expr.name not in expression.named_selects:
                 expression.select(expr.copy(), copy=False)
 
-        return outer_selects.from_(expression.subquery(alias="_t")).where(qualify_filters)
+        return outer_selects.from_(expression.subquery(alias="_t", copy=False), copy=False).where(
+            qualify_filters, copy=False
+        )
 
     return expression
 
@@ -164,8 +166,9 @@ def unnest_to_explode(expression: exp.Expression) -> exp.Expression:
 
 
 def explode_to_unnest(index_offset: int = 0) -> t.Callable[[exp.Expression], exp.Expression]:
+    """Convert explode/posexplode into unnest (used in hive -> presto)."""
+
     def _explode_to_unnest(expression: exp.Expression) -> exp.Expression:
-        """Convert explode/posexplode into unnest (used in hive -> presto)."""
         if isinstance(expression, exp.Select):
             from sqlglot.optimizer.scope import Scope
 
@@ -188,7 +191,7 @@ def explode_to_unnest(index_offset: int = 0) -> t.Callable[[exp.Expression], exp
             )
 
             # we use list here because expression.selects is mutated inside the loop
-            for select in expression.selects.copy():
+            for select in list(expression.selects):
                 explode = select.find(exp.Explode)
 
                 if explode:
@@ -297,6 +300,7 @@ PERCENTILES = (exp.PercentileCont, exp.PercentileDisc)
 
 
 def add_within_group_for_percentiles(expression: exp.Expression) -> exp.Expression:
+    """Transforms percentiles by adding a WITHIN GROUP clause to them."""
     if (
         isinstance(expression, PERCENTILES)
         and not isinstance(expression.parent, exp.WithinGroup)
@@ -311,6 +315,7 @@ def add_within_group_for_percentiles(expression: exp.Expression) -> exp.Expressi
 
 
 def remove_within_group_for_percentiles(expression: exp.Expression) -> exp.Expression:
+    """Transforms percentiles by getting rid of their corresponding WITHIN GROUP clause."""
     if (
         isinstance(expression, exp.WithinGroup)
         and isinstance(expression.this, PERCENTILES)
@@ -324,6 +329,7 @@ def remove_within_group_for_percentiles(expression: exp.Expression) -> exp.Expre
 
 
 def add_recursive_cte_column_names(expression: exp.Expression) -> exp.Expression:
+    """Uses projection output names in recursive CTE definitions to define the CTEs' columns."""
     if isinstance(expression, exp.With) and expression.recursive:
         next_name = name_sequence("_c_")
 
@@ -342,6 +348,7 @@ def add_recursive_cte_column_names(expression: exp.Expression) -> exp.Expression
 
 
 def epoch_cast_to_ts(expression: exp.Expression) -> exp.Expression:
+    """Replace 'epoch' in casts by the equivalent date literal."""
     if (
         isinstance(expression, (exp.Cast, exp.TryCast))
         and expression.name.lower() == "epoch"
@@ -352,16 +359,8 @@ def epoch_cast_to_ts(expression: exp.Expression) -> exp.Expression:
     return expression
 
 
-def timestamp_to_cast(expression: exp.Expression) -> exp.Expression:
-    if isinstance(expression, exp.Timestamp) and not expression.expression:
-        return exp.cast(
-            expression.this,
-            to=exp.DataType.Type.TIMESTAMP,
-        )
-    return expression
-
-
 def eliminate_semi_and_anti_joins(expression: exp.Expression) -> exp.Expression:
+    """Convert SEMI and ANTI joins into equivalent forms that use EXIST instead."""
     if isinstance(expression, exp.Select):
         for join in expression.args.get("joins") or []:
             on = join.args.get("on")
@@ -373,6 +372,60 @@ def eliminate_semi_and_anti_joins(expression: exp.Expression) -> exp.Expression:
 
                 join.pop()
                 expression.where(exists, copy=False)
+
+    return expression
+
+
+def eliminate_full_outer_join(expression: exp.Expression) -> exp.Expression:
+    """
+    Converts a query with a FULL OUTER join to a union of identical queries that
+    use LEFT/RIGHT OUTER joins instead. This transformation currently only works
+    for queries that have a single FULL OUTER join.
+    """
+    if isinstance(expression, exp.Select):
+        full_outer_joins = [
+            (index, join)
+            for index, join in enumerate(expression.args.get("joins") or [])
+            if join.side == "FULL" and join.kind == "OUTER"
+        ]
+
+        if len(full_outer_joins) == 1:
+            expression_copy = expression.copy()
+            index, full_outer_join = full_outer_joins[0]
+            full_outer_join.set("side", "left")
+            expression_copy.args["joins"][index].set("side", "right")
+
+            return exp.union(expression, expression_copy, copy=False)
+
+    return expression
+
+
+def move_ctes_to_top_level(expression: exp.Expression) -> exp.Expression:
+    """
+    Some dialects (e.g. Hive, T-SQL, Spark prior to version 3) only allow CTEs to be
+    defined at the top-level, so for example queries like:
+
+        SELECT * FROM (WITH t(c) AS (SELECT 1) SELECT * FROM t) AS subq
+
+    are invalid in those dialects. This transformation can be used to ensure all CTEs are
+    moved to the top level so that the final SQL code is valid from a syntax standpoint.
+
+    TODO: handle name clashes whilst moving CTEs (it can get quite tricky & costly).
+    """
+    top_level_with = expression.args.get("with")
+    for node in expression.find_all(exp.With):
+        if node.parent is expression:
+            continue
+
+        inner_with = node.pop()
+        if not top_level_with:
+            top_level_with = inner_with
+            expression.set("with", top_level_with)
+        else:
+            if inner_with.recursive:
+                top_level_with.set("recursive", True)
+
+            top_level_with.expressions.extend(inner_with.expressions)
 
     return expression
 
@@ -395,7 +448,7 @@ def preprocess(
     def _to_sql(self, expression: exp.Expression) -> str:
         expression_type = type(expression)
 
-        expression = transforms[0](expression.copy())
+        expression = transforms[0](expression)
         for t in transforms[1:]:
             expression = t(expression)
 

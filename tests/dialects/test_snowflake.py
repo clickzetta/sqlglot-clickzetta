@@ -9,6 +9,12 @@ class TestSnowflake(Validator):
     dialect = "snowflake"
 
     def test_snowflake(self):
+        expr = parse_one("SELECT APPROX_TOP_K(C4, 3, 5) FROM t")
+        expr.selects[0].assert_is(exp.AggFunc)
+        self.assertEqual(expr.sql(dialect="snowflake"), "SELECT APPROX_TOP_K(C4, 3, 5) FROM t")
+
+        self.validate_identity("SELECT DAYOFMONTH(CURRENT_TIMESTAMP())")
+        self.validate_identity("SELECT DAYOFYEAR(CURRENT_TIMESTAMP())")
         self.validate_identity("LISTAGG(data['some_field'], ',')")
         self.validate_identity("WEEKOFYEAR(tstamp)")
         self.validate_identity("SELECT SUM(amount) FROM mytable GROUP BY ALL")
@@ -36,6 +42,7 @@ class TestSnowflake(Validator):
         self.validate_identity("COMMENT IF EXISTS ON TABLE foo IS 'bar'")
         self.validate_identity("SELECT CONVERT_TIMEZONE('UTC', 'America/Los_Angeles', col)")
         self.validate_identity("REGEXP_REPLACE('target', 'pattern', '\n')")
+        self.validate_identity("ALTER TABLE a SWAP WITH b")
         self.validate_identity(
             'DESCRIBE TABLE "SNOWFLAKE_SAMPLE_DATA"."TPCDS_SF100TCL"."WEB_SITE" type=stage'
         )
@@ -57,6 +64,22 @@ class TestSnowflake(Validator):
         self.validate_identity(
             "SELECT {'test': 'best'}::VARIANT",
             "SELECT CAST(OBJECT_CONSTRUCT('test', 'best') AS VARIANT)",
+        )
+        self.validate_identity(
+            "SELECT {fn DAYNAME('2022-5-13')}",
+            "SELECT DAYNAME('2022-5-13')",
+        )
+        self.validate_identity(
+            "SELECT {fn LOG(5)}",
+            "SELECT LN(5)",
+        )
+        self.validate_identity(
+            "SELECT {fn CEILING(5.3)}",
+            "SELECT CEIL(5.3)",
+        )
+        self.validate_identity(
+            "SELECT TO_TIMESTAMP(x) FROM t",
+            "SELECT CAST(x AS TIMESTAMPNTZ) FROM t",
         )
 
         self.validate_all("CAST(x AS BYTEINT)", write={"snowflake": "CAST(x AS INT)"})
@@ -911,7 +934,23 @@ FROM cs.telescope.dag_report, TABLE(FLATTEN(input => SPLIT(operators, ','))) AS 
   f.value AS "Contact",
   f1.value['type'] AS "Type",
   f1.value['content'] AS "Details"
-FROM persons AS p, LATERAL FLATTEN(input => p.c, path => 'contact') AS f, LATERAL FLATTEN(input => f.value['business']) AS f1""",
+FROM persons AS p, LATERAL FLATTEN(input => p.c, path => 'contact') AS f(SEQ, KEY, PATH, INDEX, VALUE, THIS), LATERAL FLATTEN(input => f.value['business']) AS f1(SEQ, KEY, PATH, INDEX, VALUE, THIS)""",
+            },
+            pretty=True,
+        )
+
+        self.validate_all(
+            """
+            SELECT id as "ID",
+              value AS "Contact"
+            FROM persons p,
+              lateral flatten(input => p.c, path => 'contact')
+            """,
+            write={
+                "snowflake": """SELECT
+  id AS "ID",
+  value AS "Contact"
+FROM persons AS p, LATERAL FLATTEN(input => p.c, path => 'contact') AS _flattened(SEQ, KEY, PATH, INDEX, VALUE, THIS)""",
             },
             pretty=True,
         )
@@ -1134,3 +1173,8 @@ MATCH_RECOGNIZE (
 
         self.assertIsNotNone(table)
         self.assertEqual(table.sql(dialect="snowflake"), '"TEST"."PUBLIC"."customers"')
+
+    def test_swap(self):
+        ast = parse_one("ALTER TABLE a SWAP WITH b", read="snowflake")
+        assert isinstance(ast, exp.AlterTable)
+        assert isinstance(ast.args["actions"][0], exp.SwapTable)

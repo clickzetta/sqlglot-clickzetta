@@ -23,7 +23,7 @@ from enum import auto
 from functools import reduce
 
 from sqlglot._typing import E
-from sqlglot.errors import ParseError
+from sqlglot.errors import ErrorLevel, ParseError
 from sqlglot.helper import (
     AutoName,
     camel_to_snake_case,
@@ -1235,6 +1235,10 @@ class RenameTable(Expression):
     pass
 
 
+class SwapTable(Expression):
+    pass
+
+
 class Comment(Expression):
     arg_types = {"this": True, "kind": True, "expression": True, "exists": False}
 
@@ -1979,7 +1983,7 @@ class ChecksumProperty(Property):
 
 
 class CollateProperty(Property):
-    arg_types = {"this": True}
+    arg_types = {"this": True, "default": False}
 
 
 class CopyGrantsProperty(Property):
@@ -2139,6 +2143,22 @@ class OnCommitProperty(Property):
 
 class PartitionedByProperty(Property):
     arg_types = {"this": True}
+
+
+# https://www.postgresql.org/docs/current/sql-createtable.html
+class PartitionBoundSpec(Expression):
+    # this -> IN / MODULUS, expression -> REMAINDER, from_expressions -> FROM (...), to_expressions -> TO (...)
+    arg_types = {
+        "this": False,
+        "expression": False,
+        "from_expressions": False,
+        "to_expressions": False,
+    }
+
+
+class PartitionedOfProperty(Property):
+    # this -> parent_table (schema), expression -> FOR VALUES ... / DEFAULT
+    arg_types = {"this": True, "expression": True}
 
 
 class RemoteWithConnectionModelProperty(Property):
@@ -2482,6 +2502,7 @@ class Table(Expression):
         "format": False,
         "pattern": False,
         "index": False,
+        "ordinality": False,
     }
 
     @property
@@ -2645,11 +2666,7 @@ class Update(Expression):
 
 
 class Values(UDTF):
-    arg_types = {
-        "expressions": True,
-        "ordinality": False,
-        "alias": False,
-    }
+    arg_types = {"expressions": True, "alias": False}
 
 
 class Var(Expression):
@@ -3497,7 +3514,7 @@ class Star(Expression):
 
 
 class Parameter(Condition):
-    arg_types = {"this": True, "wrapped": False}
+    arg_types = {"this": True, "expression": False}
 
 
 class SessionParameter(Condition):
@@ -3700,7 +3717,9 @@ class DataType(Expression):
                 return DataType(this=DataType.Type.UNKNOWN, **kwargs)
 
             try:
-                data_type_exp = parse_one(dtype, read=dialect, into=DataType)
+                data_type_exp = parse_one(
+                    dtype, read=dialect, into=DataType, error_level=ErrorLevel.IGNORE
+                )
             except ParseError:
                 if udt:
                     return DataType(this=DataType.Type.USERDEFINED, kind=dtype, **kwargs)
@@ -4063,10 +4082,25 @@ class TimeUnit(Expression):
 
     arg_types = {"unit": False}
 
+    UNABBREVIATED_UNIT_NAME = {
+        "d": "day",
+        "h": "hour",
+        "m": "minute",
+        "ms": "millisecond",
+        "ns": "nanosecond",
+        "q": "quarter",
+        "s": "second",
+        "us": "microsecond",
+        "w": "week",
+        "y": "year",
+    }
+
+    VAR_LIKE = (Column, Literal, Var)
+
     def __init__(self, **args):
         unit = args.get("unit")
-        if isinstance(unit, (Column, Literal)):
-            args["unit"] = Var(this=unit.name)
+        if isinstance(unit, self.VAR_LIKE):
+            args["unit"] = Var(this=self.UNABBREVIATED_UNIT_NAME.get(unit.name) or unit.name)
         elif isinstance(unit, Week):
             unit.set("this", Var(this=unit.this.name))
 
@@ -4165,6 +4199,24 @@ class ParameterizedAgg(AggFunc):
 
 
 class Abs(Func):
+    pass
+
+
+class ArgMax(AggFunc):
+    arg_types = {"this": True, "expression": True, "count": False}
+    _sql_names = ["ARG_MAX", "ARGMAX", "MAX_BY"]
+
+
+class ArgMin(AggFunc):
+    arg_types = {"this": True, "expression": True, "count": False}
+    _sql_names = ["ARG_MIN", "ARGMIN", "MIN_BY"]
+
+
+class ApproxTopK(AggFunc):
+    arg_types = {"this": True, "expression": False, "counters": False}
+
+
+class Flatten(Func):
     pass
 
 
@@ -4540,8 +4592,10 @@ class Exp(Func):
     pass
 
 
+# https://docs.snowflake.com/en/sql-reference/functions/flatten
 class Explode(Func):
-    pass
+    arg_types = {"this": True, "expressions": False}
+    is_var_len_args = True
 
 
 class ExplodeOuter(Explode):
@@ -4700,6 +4754,8 @@ class JSONArrayContains(Binary, Predicate, Func):
 class ParseJSON(Func):
     # BigQuery, Snowflake have PARSE_JSON, Presto has JSON_PARSE
     _sql_names = ["PARSE_JSON", "JSON_PARSE"]
+    arg_types = {"this": True, "expressions": False}
+    is_var_len_args = True
 
 
 class Least(Func):
@@ -4759,6 +4815,16 @@ class Lower(Func):
 
 class Map(Func):
     arg_types = {"keys": False, "values": False}
+
+    @property
+    def keys(self) -> t.List[Expression]:
+        keys = self.args.get("keys")
+        return keys.expressions if keys else []
+
+    @property
+    def values(self) -> t.List[Expression]:
+        values = self.args.get("values")
+        return values.expressions if values else []
 
 
 class MapFromEntries(Func):
@@ -4872,6 +4938,7 @@ class RegexpReplace(Func):
         "position": False,
         "occurrence": False,
         "parameters": False,
+        "modifiers": False,
     }
 
 
@@ -5119,7 +5186,7 @@ class Use(Expression):
 
 
 class Merge(Expression):
-    arg_types = {"this": True, "using": True, "on": True, "expressions": True}
+    arg_types = {"this": True, "using": True, "on": True, "expressions": True, "with": False}
 
 
 class When(Func):
@@ -5407,7 +5474,12 @@ def _wrap(expression: E, kind: t.Type[Expression]) -> E | Paren:
 
 
 def union(
-    left: ExpOrStr, right: ExpOrStr, distinct: bool = True, dialect: DialectType = None, **opts
+    left: ExpOrStr,
+    right: ExpOrStr,
+    distinct: bool = True,
+    dialect: DialectType = None,
+    copy: bool = True,
+    **opts,
 ) -> Union:
     """
     Initializes a syntax tree from one UNION expression.
@@ -5423,19 +5495,25 @@ def union(
             If an `Expression` instance is passed, it will be used as-is.
         distinct: set the DISTINCT flag if and only if this is true.
         dialect: the dialect used to parse the input expression.
+        copy: whether or not to copy the expression.
         opts: other options to use to parse the input expressions.
 
     Returns:
         The new Union instance.
     """
-    left = maybe_parse(sql_or_expression=left, dialect=dialect, **opts)
-    right = maybe_parse(sql_or_expression=right, dialect=dialect, **opts)
+    left = maybe_parse(sql_or_expression=left, dialect=dialect, copy=copy, **opts)
+    right = maybe_parse(sql_or_expression=right, dialect=dialect, copy=copy, **opts)
 
     return Union(this=left, expression=right, distinct=distinct)
 
 
 def intersect(
-    left: ExpOrStr, right: ExpOrStr, distinct: bool = True, dialect: DialectType = None, **opts
+    left: ExpOrStr,
+    right: ExpOrStr,
+    distinct: bool = True,
+    dialect: DialectType = None,
+    copy: bool = True,
+    **opts,
 ) -> Intersect:
     """
     Initializes a syntax tree from one INTERSECT expression.
@@ -5451,19 +5529,25 @@ def intersect(
             If an `Expression` instance is passed, it will be used as-is.
         distinct: set the DISTINCT flag if and only if this is true.
         dialect: the dialect used to parse the input expression.
+        copy: whether or not to copy the expression.
         opts: other options to use to parse the input expressions.
 
     Returns:
         The new Intersect instance.
     """
-    left = maybe_parse(sql_or_expression=left, dialect=dialect, **opts)
-    right = maybe_parse(sql_or_expression=right, dialect=dialect, **opts)
+    left = maybe_parse(sql_or_expression=left, dialect=dialect, copy=copy, **opts)
+    right = maybe_parse(sql_or_expression=right, dialect=dialect, copy=copy, **opts)
 
     return Intersect(this=left, expression=right, distinct=distinct)
 
 
 def except_(
-    left: ExpOrStr, right: ExpOrStr, distinct: bool = True, dialect: DialectType = None, **opts
+    left: ExpOrStr,
+    right: ExpOrStr,
+    distinct: bool = True,
+    dialect: DialectType = None,
+    copy: bool = True,
+    **opts,
 ) -> Except:
     """
     Initializes a syntax tree from one EXCEPT expression.
@@ -5479,13 +5563,14 @@ def except_(
             If an `Expression` instance is passed, it will be used as-is.
         distinct: set the DISTINCT flag if and only if this is true.
         dialect: the dialect used to parse the input expression.
+        copy: whether or not to copy the expression.
         opts: other options to use to parse the input expressions.
 
     Returns:
         The new Except instance.
     """
-    left = maybe_parse(sql_or_expression=left, dialect=dialect, **opts)
-    right = maybe_parse(sql_or_expression=right, dialect=dialect, **opts)
+    left = maybe_parse(sql_or_expression=left, dialect=dialect, copy=copy, **opts)
+    right = maybe_parse(sql_or_expression=right, dialect=dialect, copy=copy, **opts)
 
     return Except(this=left, expression=right, distinct=distinct)
 

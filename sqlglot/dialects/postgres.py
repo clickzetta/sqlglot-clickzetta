@@ -20,7 +20,6 @@ from sqlglot.dialects.dialect import (
     no_trycast_sql,
     parse_timestamp_trunc,
     rename_func,
-    simplify_literal,
     str_position_sql,
     struct_extract_sql,
     timestamptrunc_sql,
@@ -44,12 +43,10 @@ DATE_DIFF_FACTOR = {
 
 def _date_add_sql(kind: str) -> t.Callable[[Postgres.Generator, exp.DateAdd | exp.DateSub], str]:
     def func(self: Postgres.Generator, expression: exp.DateAdd | exp.DateSub) -> str:
-        expression = expression.copy()
-
         this = self.sql(expression, "this")
         unit = expression.args.get("unit")
 
-        expression = simplify_literal(expression).expression
+        expression = self._simplify_unless_literal(expression.expression)
         if not isinstance(expression, exp.Literal):
             self.unsupported("Cannot add non literal")
 
@@ -97,7 +94,6 @@ def _substring_sql(self: Postgres.Generator, expression: exp.Substring) -> str:
 
 
 def _string_agg_sql(self: Postgres.Generator, expression: exp.GroupConcat) -> str:
-    expression = expression.copy()
     separator = expression.args.get("separator") or exp.Literal.string(",")
 
     order = ""
@@ -120,7 +116,6 @@ def _auto_increment_to_serial(expression: exp.Expression) -> exp.Expression:
     auto = expression.find(exp.AutoIncrementColumnConstraint)
 
     if auto:
-        expression = expression.copy()
         expression.args["constraints"].remove(auto.parent)
         kind = expression.args["kind"]
 
@@ -135,7 +130,9 @@ def _auto_increment_to_serial(expression: exp.Expression) -> exp.Expression:
 
 
 def _serial_to_generated(expression: exp.Expression) -> exp.Expression:
-    kind = expression.args["kind"]
+    kind = expression.args.get("kind")
+    if not kind:
+        return expression
 
     if kind.this == exp.DataType.Type.SERIAL:
         data_type = exp.DataType(this=exp.DataType.Type.INT)
@@ -147,7 +144,6 @@ def _serial_to_generated(expression: exp.Expression) -> exp.Expression:
         data_type = None
 
     if data_type:
-        expression = expression.copy()
         expression.args["kind"].replace(data_type)
         constraints = expression.args["constraints"]
         generated = exp.ColumnConstraint(kind=exp.GeneratedAsIdentityColumnConstraint(this=False))
@@ -410,6 +406,7 @@ class Postgres(Dialect):
             exp.MapFromEntries: no_map_from_entries_sql,
             exp.Min: min_or_least,
             exp.Merge: transforms.preprocess([_remove_target_from_merge]),
+            exp.PartitionedByProperty: lambda self, e: f"PARTITION BY {self.sql(e, 'this')}",
             exp.PercentileCont: transforms.preprocess(
                 [transforms.add_within_group_for_percentiles]
             ),
@@ -446,6 +443,7 @@ class Postgres(Dialect):
 
         PROPERTIES_LOCATION = {
             **generator.Generator.PROPERTIES_LOCATION,
+            exp.PartitionedByProperty: exp.Properties.Location.POST_SCHEMA,
             exp.TransientProperty: exp.Properties.Location.UNSUPPORTED,
             exp.VolatileProperty: exp.Properties.Location.UNSUPPORTED,
         }
@@ -453,7 +451,6 @@ class Postgres(Dialect):
         def bracket_sql(self, expression: exp.Bracket) -> str:
             """Forms like ARRAY[1, 2, 3][3] aren't allowed; we need to wrap the ARRAY."""
             if isinstance(expression.this, exp.Array):
-                expression = expression.copy()
                 expression.set("this", exp.paren(expression.this, copy=False))
 
             return super().bracket_sql(expression)

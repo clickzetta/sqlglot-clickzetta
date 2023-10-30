@@ -8,6 +8,7 @@ from sqlglot import exp, generator, parser, tokens, transforms
 from sqlglot._typing import E
 from sqlglot.dialects.dialect import (
     Dialect,
+    arg_max_or_min_no_count,
     binary_from_function,
     date_add_interval_sql,
     datestrtodate_sql,
@@ -68,7 +69,6 @@ def _create_sql(self: BigQuery.Generator, expression: exp.Create) -> str:
     returns = expression.find(exp.ReturnsProperty)
 
     if kind.upper() == "FUNCTION" and returns and returns.args.get("is_table"):
-        expression = expression.copy()
         expression.set("kind", "TABLE FUNCTION")
 
         if isinstance(expression.expression, (exp.Subquery, exp.Literal)):
@@ -434,8 +434,13 @@ class BigQuery(Dialect):
         TRANSFORMS = {
             **generator.Generator.TRANSFORMS,
             exp.ApproxDistinct: rename_func("APPROX_COUNT_DISTINCT"),
+            exp.ArgMax: arg_max_or_min_no_count("MAX_BY"),
+            exp.ArgMin: arg_max_or_min_no_count("MIN_BY"),
             exp.ArraySize: rename_func("ARRAY_LENGTH"),
             exp.Cast: transforms.preprocess([transforms.remove_precision_parameterized_types]),
+            exp.CollateProperty: lambda self, e: f"DEFAULT COLLATE {self.sql(e, 'this')}"
+            if e.args.get("default")
+            else f"COLLATE {self.sql(e, 'this')}",
             exp.Create: _create_sql,
             exp.CTE: transforms.preprocess([_pushdown_cte_column_names]),
             exp.DateAdd: date_add_interval_sql("DATE", "ADD"),
@@ -693,6 +698,5 @@ class BigQuery(Dialect):
 
         def version_sql(self, expression: exp.Version) -> str:
             if expression.name == "TIMESTAMP":
-                expression = expression.copy()
                 expression.set("this", "SYSTEM_TIME")
             return super().version_sql(expression)

@@ -5,6 +5,7 @@ import typing as t
 from sqlglot import exp, generator, parser, tokens, transforms
 from sqlglot.dialects.dialect import (
     Dialect,
+    arg_max_or_min_no_count,
     inline_array_sql,
     no_pivot_sql,
     rename_func,
@@ -373,8 +374,11 @@ class ClickHouse(Dialect):
             exp.Select: transforms.preprocess([transforms.eliminate_qualify]),
             exp.AnyValue: rename_func("any"),
             exp.ApproxDistinct: rename_func("uniq"),
+            exp.ArgMax: arg_max_or_min_no_count("argMax"),
+            exp.ArgMin: arg_max_or_min_no_count("argMin"),
             exp.Array: inline_array_sql,
             exp.CastToStrType: rename_func("CAST"),
+            exp.CurrentDate: lambda self, e: self.func("CURRENT_DATE"),
             exp.DateAdd: lambda self, e: self.func(
                 "DATE_ADD", exp.Literal.string(e.text("unit") or "day"), e.expression, e.this
             ),
@@ -419,7 +423,10 @@ class ClickHouse(Dialect):
         }
 
         def _any_to_has(
-            self, expression: exp.EQ | exp.NEQ, default: t.Callable[[t.Any], str]
+            self,
+            expression: exp.EQ | exp.NEQ,
+            default: t.Callable[[t.Any], str],
+            prefix: str = "",
         ) -> str:
             if isinstance(expression.left, exp.Any):
                 arr = expression.left
@@ -429,13 +436,13 @@ class ClickHouse(Dialect):
                 this = expression.left
             else:
                 return default(expression)
-            return self.func("has", arr.this.unnest(), this)
+            return prefix + self.func("has", arr.this.unnest(), this)
 
         def eq_sql(self, expression: exp.EQ) -> str:
             return self._any_to_has(expression, super().eq_sql)
 
         def neq_sql(self, expression: exp.NEQ) -> str:
-            return f"NOT {self._any_to_has(expression, super().neq_sql)}"
+            return self._any_to_has(expression, super().neq_sql, "NOT ")
 
         def regexpilike_sql(self, expression: exp.RegexpILike) -> str:
             # Manually add a flag to make the search case-insensitive
@@ -454,7 +461,6 @@ class ClickHouse(Dialect):
 
         def safeconcat_sql(self, expression: exp.SafeConcat) -> str:
             # Clickhouse errors out if we try to cast a NULL value to TEXT
-            expression = expression.copy()
             return self.func(
                 "CONCAT",
                 *[

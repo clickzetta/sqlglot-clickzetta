@@ -10,7 +10,7 @@ from sqlglot.errors import ParseError
 from sqlglot.generator import Generator
 from sqlglot.helper import flatten, seq_get
 from sqlglot.parser import Parser
-from sqlglot.time import format_time
+from sqlglot.time import TIMEZONES, format_time
 from sqlglot.tokens import Token, Tokenizer, TokenType
 from sqlglot.trie import new_trie
 
@@ -316,11 +316,14 @@ class Dialect(metaclass=_Dialect):
     ) -> t.List[t.Optional[exp.Expression]]:
         return self.parser(**opts).parse_into(expression_type, self.tokenize(sql), sql)
 
-    def generate(self, expression: t.Optional[exp.Expression], **opts) -> str:
-        return self.generator(**opts).generate(expression)
+    def generate(self, expression: exp.Expression, copy: bool = True, **opts) -> str:
+        return self.generator(**opts).generate(expression, copy=copy)
 
     def transpile(self, sql: str, **opts) -> t.List[str]:
-        return [self.generate(expression, **opts) for expression in self.parse(sql)]
+        return [
+            self.generate(expression, copy=False, **opts) if expression else ""
+            for expression in self.parse(sql)
+        ]
 
     def tokenize(self, sql: str) -> t.List[Token]:
         return self.tokenizer.tokenize(sql)
@@ -381,9 +384,7 @@ def inline_array_sql(self: Generator, expression: exp.Array) -> str:
 
 def no_ilike_sql(self: Generator, expression: exp.ILike) -> str:
     return self.like_sql(
-        exp.Like(
-            this=exp.Lower(this=expression.this.copy()), expression=expression.expression.copy()
-        )
+        exp.Like(this=exp.Lower(this=expression.this), expression=expression.expression)
     )
 
 
@@ -519,7 +520,6 @@ def create_with_partitions_sql(self: Generator, expression: exp.Create) -> str:
     is_partitionable = expression.args.get("kind") in ("TABLE", "VIEW")
 
     if has_schema and is_partitionable:
-        expression = expression.copy()
         prop = expression.find(exp.PartitionedByProperty)
         if prop and prop.this and not isinstance(prop.this, exp.Schema):
             schema = expression.this
@@ -584,7 +584,7 @@ def date_add_interval_sql(
         this = self.sql(expression, "this")
         unit = expression.args.get("unit")
         unit = exp.var(unit.name.upper() if unit else "DAY")
-        interval = exp.Interval(this=expression.expression.copy(), unit=unit)
+        interval = exp.Interval(this=expression.expression, unit=unit)
         return f"{data_type}_{kind}({this}, {self.sql(interval)})"
 
     return func
@@ -594,6 +594,19 @@ def timestamptrunc_sql(self: Generator, expression: exp.TimestampTrunc) -> str:
     return self.func(
         "DATE_TRUNC", exp.Literal.string(expression.text("unit") or "day"), expression.this
     )
+
+
+def no_timestamp_sql(self: Generator, expression: exp.Timestamp) -> str:
+    if not expression.expression:
+        return self.sql(exp.cast(expression.this, to=exp.DataType.Type.TIMESTAMP))
+    if expression.text("expression").lower() in TIMEZONES:
+        return self.sql(
+            exp.AtTimeZone(
+                this=exp.cast(expression.this, to=exp.DataType.Type.TIMESTAMP),
+                zone=expression.expression,
+            )
+        )
+    return self.function_fallback_sql(expression)
 
 
 def locate_to_strposition(args: t.List) -> exp.Expression:
@@ -609,7 +622,6 @@ def strposition_to_locate_sql(self: Generator, expression: exp.StrPosition) -> s
 
 
 def left_to_substring_sql(self: Generator, expression: exp.Left) -> str:
-    expression = expression.copy()
     return self.sql(
         exp.Substring(
             this=expression.this, start=exp.Literal.number(1), length=expression.expression
@@ -618,7 +630,6 @@ def left_to_substring_sql(self: Generator, expression: exp.Left) -> str:
 
 
 def right_to_substring_sql(self: Generator, expression: exp.Left) -> str:
-    expression = expression.copy()
     return self.sql(
         exp.Substring(
             this=expression.this,
@@ -663,7 +674,7 @@ def count_if_to_sum(self: Generator, expression: exp.CountIf) -> str:
         cond = expression.this.expressions[0]
         self.unsupported("DISTINCT is not supported when converting COUNT_IF to SUM")
 
-    return self.func("sum", exp.func("if", cond.copy(), 1, 0))
+    return self.func("sum", exp.func("if", cond, 1, 0))
 
 
 def trim_sql(self: Generator, expression: exp.Trim) -> str:
@@ -692,20 +703,22 @@ def ts_or_ds_to_date_sql(dialect: str) -> t.Callable:
         _dialect = Dialect.get_or_raise(dialect)
         time_format = self.format_time(expression)
         if time_format and time_format not in (_dialect.TIME_FORMAT, _dialect.DATE_FORMAT):
-            return self.sql(exp.cast(str_to_time_sql(self, expression), "date"))
-
-        return self.sql(exp.cast(self.sql(expression, "this"), "date"))
+            return self.sql(
+                exp.cast(
+                    exp.StrToTime(this=expression.this, format=expression.args["format"]),
+                    "date",
+                )
+            )
+        return self.sql(exp.cast(expression.this, "date"))
 
     return _ts_or_ds_to_date_sql
 
 
 def concat_to_dpipe_sql(self: Generator, expression: exp.Concat | exp.SafeConcat) -> str:
-    expression = expression.copy()
     return self.sql(reduce(lambda x, y: exp.DPipe(this=x, expression=y), expression.expressions))
 
 
 def concat_ws_to_dpipe_sql(self: Generator, expression: exp.ConcatWs) -> str:
-    expression = expression.copy()
     delim, *rest_args = expression.expressions
     return self.sql(
         reduce(
@@ -726,7 +739,9 @@ def regexp_extract_sql(self: Generator, expression: exp.RegexpExtract) -> str:
 
 
 def regexp_replace_sql(self: Generator, expression: exp.RegexpReplace) -> str:
-    bad_args = list(filter(expression.args.get, ("position", "occurrence", "parameters")))
+    bad_args = list(
+        filter(expression.args.get, ("position", "occurrence", "parameters", "modifiers"))
+    )
     if bad_args:
         self.unsupported(f"REGEXP_REPLACE does not support the following arg(s): {bad_args}")
 
@@ -755,15 +770,6 @@ def pivot_column_names(aggregations: t.List[exp.Expression], dialect: DialectTyp
             names.append(agg_all_unquoted.sql(dialect=dialect, normalize_functions="lower"))
 
     return names
-
-
-def simplify_literal(expression: E) -> E:
-    if not isinstance(expression.expression, exp.Literal):
-        from sqlglot.optimizer.simplify import simplify
-
-        simplify(expression.expression)
-
-    return expression
 
 
 def binary_from_function(expr_type: t.Type[B]) -> t.Callable[[t.List], B]:
@@ -800,8 +806,19 @@ def isnull_to_is_null(args: t.List) -> exp.Expression:
     return exp.Paren(this=exp.Is(this=seq_get(args, 0), expression=exp.null()))
 
 
-def move_insert_cte_sql(self: Generator, expression: exp.Insert) -> str:
-    if expression.expression.args.get("with"):
-        expression = expression.copy()
-        expression.set("with", expression.expression.args["with"].pop())
-    return self.insert_sql(expression)
+def generatedasidentitycolumnconstraint_sql(
+    self: Generator, expression: exp.GeneratedAsIdentityColumnConstraint
+) -> str:
+    start = self.sql(expression, "start") or "1"
+    increment = self.sql(expression, "increment") or "1"
+    return f"IDENTITY({start}, {increment})"
+
+
+def arg_max_or_min_no_count(name: str) -> t.Callable[[Generator, exp.ArgMax | exp.ArgMin], str]:
+    def _arg_max_or_min_sql(self: Generator, expression: exp.ArgMax | exp.ArgMin) -> str:
+        if expression.args.get("count"):
+            self.unsupported(f"Only two arguments are supported in function {name}.")
+
+        return self.func(name, expression.this, expression.expression)
+
+    return _arg_max_or_min_sql

@@ -6,6 +6,8 @@ class TestClickhouse(Validator):
     dialect = "clickhouse"
 
     def test_clickhouse(self):
+        self.validate_identity("x <> y")
+
         self.validate_all(
             "has([1], x)",
             read={
@@ -99,6 +101,27 @@ class TestClickhouse(Validator):
             "CREATE MATERIALIZED VIEW test_view (id UInt8) TO db.table1 AS SELECT * FROM test_data"
         )
 
+        self.validate_all(
+            "SELECT CAST('2020-01-01' AS TIMESTAMP) + INTERVAL '500' microsecond",
+            read={
+                "duckdb": "SELECT TIMESTAMP '2020-01-01' + INTERVAL '500 us'",
+                "postgres": "SELECT TIMESTAMP '2020-01-01' + INTERVAL '500 us'",
+            },
+        )
+        self.validate_all(
+            "SELECT CURRENT_DATE()",
+            read={
+                "clickhouse": "SELECT CURRENT_DATE()",
+                "postgres": "SELECT CURRENT_DATE",
+            },
+        )
+        self.validate_all(
+            "SELECT CURRENT_TIMESTAMP()",
+            read={
+                "clickhouse": "SELECT CURRENT_TIMESTAMP()",
+                "postgres": "SELECT CURRENT_TIMESTAMP",
+            },
+        )
         self.validate_all(
             "SELECT match('ThOmAs', CONCAT('(?i)', 'thomas'))",
             read={

@@ -632,6 +632,11 @@ class TestExpressions(unittest.TestCase):
         week = unit.find(exp.Week)
         self.assertEqual(week.this, exp.var("thursday"))
 
+        for abbreviated_unit, unnabreviated_unit in exp.TimeUnit.UNABBREVIATED_UNIT_NAME.items():
+            interval = parse_one(f"interval '500 {abbreviated_unit}'")
+            self.assertIsInstance(interval.unit, exp.Var)
+            self.assertEqual(interval.unit.name, unnabreviated_unit)
+
     def test_identifier(self):
         self.assertTrue(exp.to_identifier('"x"').quoted)
         self.assertFalse(exp.to_identifier("x").quoted)
@@ -861,6 +866,10 @@ FROM foo""",
 
         self.assertEqual(exp.DataType.build("ARRAY<UNKNOWN>").sql(), "ARRAY<UNKNOWN>")
         self.assertEqual(exp.DataType.build("ARRAY<NULL>").sql(), "ARRAY<NULL>")
+        self.assertEqual(exp.DataType.build("varchar(100) collate 'en-ci'").sql(), "VARCHAR(100)")
+
+        with self.assertRaises(ParseError):
+            exp.DataType.build("varchar(")
 
     def test_rename_table(self):
         self.assertEqual(

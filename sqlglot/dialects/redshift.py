@@ -6,6 +6,7 @@ from sqlglot import exp, transforms
 from sqlglot.dialects.dialect import (
     concat_to_dpipe_sql,
     concat_ws_to_dpipe_sql,
+    generatedasidentitycolumnconstraint_sql,
     rename_func,
     ts_or_ds_to_date_sql,
 )
@@ -55,6 +56,7 @@ class Redshift(Postgres):
                 expression=exp.TsOrDsToDate(this=seq_get(args, 1)),
                 unit=seq_get(args, 0),
             ),
+            "LISTAGG": exp.GroupConcat.from_arg_list,
             "STRTOL": exp.FromBase.from_arg_list,
         }
 
@@ -171,8 +173,11 @@ class Redshift(Postgres):
             exp.DistKeyProperty: lambda self, e: f"DISTKEY({e.name})",
             exp.DistStyleProperty: lambda self, e: self.naked_property(e),
             exp.FromBase: rename_func("STRTOL"),
+            exp.GeneratedAsIdentityColumnConstraint: generatedasidentitycolumnconstraint_sql,
             exp.JSONExtract: _json_sql,
             exp.JSONExtractScalar: _json_sql,
+            exp.GroupConcat: rename_func("LISTAGG"),
+            exp.ParseJSON: rename_func("JSON_PARSE"),
             exp.SafeConcat: concat_to_dpipe_sql,
             exp.Select: transforms.preprocess(
                 [transforms.eliminate_distinct_on, transforms.eliminate_semi_and_anti_joins]
@@ -204,7 +209,6 @@ class Redshift(Postgres):
             `TEXT` to `VARCHAR`.
             """
             if expression.is_type("text"):
-                expression = expression.copy()
                 expression.set("this", exp.DataType.Type.VARCHAR)
                 precision = expression.args.get("expressions")
 

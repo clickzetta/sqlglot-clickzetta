@@ -6,6 +6,7 @@ from sqlglot import exp, generator, parser, tokens, transforms
 from sqlglot.dialects.dialect import (
     Dialect,
     approx_count_distinct_sql,
+    arg_max_or_min_no_count,
     create_with_partitions_sql,
     format_time_lambda,
     if_sql,
@@ -52,8 +53,6 @@ DIFF_MONTH_SWITCH = ("YEAR", "QUARTER", "MONTH")
 
 
 def _create_sql(self, expression: exp.Create) -> str:
-    expression = expression.copy()
-
     # remove UNIQUE column constraints
     for constraint in expression.find_all(exp.UniqueColumnConstraint):
         if constraint.parent:
@@ -87,7 +86,7 @@ def _add_date_sql(self: Hive.Generator, expression: exp.DateAdd | exp.DateSub) -
     if expression.expression.is_number:
         modified_increment = exp.Literal.number(int(expression.text("expression")) * multiplier)
     else:
-        modified_increment = expression.expression.copy()
+        modified_increment = expression.expression
         if multiplier != 1:
             modified_increment = exp.Mul(  # type: ignore
                 this=modified_increment, expression=exp.Literal.number(multiplier)
@@ -106,10 +105,15 @@ def _date_diff_sql(self: Hive.Generator, expression: exp.DateDiff) -> str:
         sec_diff = f"UNIX_TIMESTAMP({left}) - UNIX_TIMESTAMP({right})"
         return f"({sec_diff}){factor}" if factor else sec_diff
 
-    sql_func = "MONTHS_BETWEEN" if unit in DIFF_MONTH_SWITCH else "DATEDIFF"
+    months_between = unit in DIFF_MONTH_SWITCH
+    sql_func = "MONTHS_BETWEEN" if months_between else "DATEDIFF"
     _, multiplier = DATE_DELTA_INTERVAL.get(unit, ("", 1))
     multiplier_sql = f" / {multiplier}" if multiplier > 1 else ""
     diff_sql = f"{sql_func}({self.format_args(expression.this, expression.expression)})"
+
+    if months_between:
+        # MONTHS_BETWEEN returns a float, so we need to truncate the fractional part
+        diff_sql = f"CAST({diff_sql} AS INT)"
 
     return f"{diff_sql}{multiplier_sql}"
 
@@ -222,6 +226,11 @@ class Hive(Dialect):
         IDENTIFIERS = ["`"]
         STRING_ESCAPES = ["\\"]
         ENCODE = "utf-8"
+
+        SINGLE_TOKENS = {
+            **tokens.Tokenizer.SINGLE_TOKENS,
+            "$": TokenType.PARAMETER,
+        }
 
         KEYWORDS = {
             **tokens.Tokenizer.KEYWORDS,
@@ -402,6 +411,7 @@ class Hive(Dialect):
         INDEX_ON = "ON TABLE"
         EXTRACT_ALLOWS_QUOTES = False
         NVL2_SUPPORTED = False
+        SUPPORTS_NESTED_CTES = False
 
         TYPE_MAPPING = {
             **generator.Generator.TYPE_MAPPING,
@@ -426,6 +436,8 @@ class Hive(Dialect):
             exp.Property: _property_sql,
             exp.AnyValue: rename_func("FIRST"),
             exp.ApproxDistinct: approx_count_distinct_sql,
+            exp.ArgMax: arg_max_or_min_no_count("MAX_BY"),
+            exp.ArgMin: arg_max_or_min_no_count("MIN_BY"),
             exp.ArrayConcat: rename_func("CONCAT"),
             exp.ArrayJoin: lambda self, e: self.func("CONCAT_WS", e.expression, e.this),
             exp.ArraySize: rename_func("SIZE"),
@@ -513,7 +525,10 @@ class Hive(Dialect):
 
         def parameter_sql(self, expression: exp.Parameter) -> str:
             this = self.sql(expression, "this")
+            expression_sql = self.sql(expression, "expression")
+
             parent = expression.parent
+            this = f"{this}:{expression_sql}" if expression_sql else this
 
             if isinstance(parent, exp.EQ) and isinstance(parent.parent, exp.SetItem):
                 # We need to produce SET key = value instead of SET ${key} = value
@@ -522,8 +537,6 @@ class Hive(Dialect):
             return f"${{{this}}}"
 
         def schema_sql(self, expression: exp.Schema) -> str:
-            expression = expression.copy()
-
             for ordered in expression.find_all(exp.Ordered):
                 if ordered.args.get("desc") is False:
                     ordered.set("desc", None)
@@ -531,8 +544,6 @@ class Hive(Dialect):
             return super().schema_sql(expression)
 
         def constraint_sql(self, expression: exp.Constraint) -> str:
-            expression = expression.copy()
-
             for prop in list(expression.find_all(exp.Properties)):
                 prop.pop()
 

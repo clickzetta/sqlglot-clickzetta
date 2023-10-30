@@ -7,6 +7,36 @@ class TestTSQL(Validator):
 
     def test_tsql(self):
         self.validate_all(
+            "WITH t(c) AS (SELECT 1) SELECT * INTO foo FROM (SELECT c FROM t) AS temp",
+            read={
+                "duckdb": "CREATE TABLE foo AS WITH t(c) AS (SELECT 1) SELECT c FROM t",
+            },
+        )
+        self.validate_all(
+            "WITH y AS (SELECT 2 AS c) INSERT INTO t SELECT * FROM y",
+            read={
+                "duckdb": "WITH y AS (SELECT 2 AS c) INSERT INTO t SELECT * FROM y",
+            },
+        )
+        self.validate_all(
+            "WITH t(c) AS (SELECT 1) SELECT 1 AS c UNION (SELECT c FROM t)",
+            read={
+                "duckdb": "SELECT 1 AS c UNION (WITH t(c) AS (SELECT 1) SELECT c FROM t)",
+            },
+        )
+        self.validate_all(
+            "WITH t(c) AS (SELECT 1) MERGE INTO x AS z USING (SELECT c FROM t) AS y ON a = b WHEN MATCHED THEN UPDATE SET a = y.b",
+            read={
+                "postgres": "MERGE INTO x AS z USING (WITH t(c) AS (SELECT 1) SELECT c FROM t) AS y ON a = b WHEN MATCHED THEN UPDATE SET a = y.b",
+            },
+        )
+        self.validate_all(
+            "WITH t(n) AS (SELECT 1 AS n UNION ALL SELECT n + 1 AS n FROM t WHERE n < 4) SELECT * FROM (SELECT SUM(n) AS s4 FROM t) AS subq",
+            read={
+                "duckdb": "SELECT * FROM (WITH RECURSIVE t(n) AS (SELECT 1 AS n UNION ALL SELECT n + 1 AS n FROM t WHERE n < 4) SELECT SUM(n) AS s4 FROM t) AS subq",
+            },
+        )
+        self.validate_all(
             "CREATE TABLE #mytemptable (a INTEGER)",
             read={
                 "duckdb": "CREATE TEMPORARY TABLE mytemptable (a INT)",
@@ -1058,18 +1088,18 @@ WHERE
             },
         )
         self.validate_all(
-            "SELECT DATEDIFF(year, '2020/01/01', '2021/01/01')",
+            "SELECT DATEDIFF(year, '2020-01-01', '2021-01-01')",
             write={
-                "tsql": "SELECT DATEDIFF(year, CAST('2020/01/01' AS DATETIME2), CAST('2021/01/01' AS DATETIME2))",
-                "spark": "SELECT DATEDIFF(year, CAST('2020/01/01' AS TIMESTAMP), CAST('2021/01/01' AS TIMESTAMP))",
-                "spark2": "SELECT MONTHS_BETWEEN(CAST('2021/01/01' AS TIMESTAMP), CAST('2020/01/01' AS TIMESTAMP)) / 12",
+                "tsql": "SELECT DATEDIFF(year, CAST('2020-01-01' AS DATETIME2), CAST('2021-01-01' AS DATETIME2))",
+                "spark": "SELECT DATEDIFF(year, CAST('2020-01-01' AS TIMESTAMP), CAST('2021-01-01' AS TIMESTAMP))",
+                "spark2": "SELECT CAST(MONTHS_BETWEEN(CAST('2021-01-01' AS TIMESTAMP), CAST('2020-01-01' AS TIMESTAMP)) AS INT) / 12",
             },
         )
         self.validate_all(
             "SELECT DATEDIFF(mm, 'start', 'end')",
             write={
                 "databricks": "SELECT DATEDIFF(month, CAST('start' AS TIMESTAMP), CAST('end' AS TIMESTAMP))",
-                "spark2": "SELECT MONTHS_BETWEEN(CAST('end' AS TIMESTAMP), CAST('start' AS TIMESTAMP))",
+                "spark2": "SELECT CAST(MONTHS_BETWEEN(CAST('end' AS TIMESTAMP), CAST('start' AS TIMESTAMP)) AS INT)",
                 "tsql": "SELECT DATEDIFF(month, CAST('start' AS DATETIME2), CAST('end' AS DATETIME2))",
             },
         )
@@ -1078,7 +1108,7 @@ WHERE
             write={
                 "databricks": "SELECT DATEDIFF(quarter, CAST('start' AS TIMESTAMP), CAST('end' AS TIMESTAMP))",
                 "spark": "SELECT DATEDIFF(quarter, CAST('start' AS TIMESTAMP), CAST('end' AS TIMESTAMP))",
-                "spark2": "SELECT MONTHS_BETWEEN(CAST('end' AS TIMESTAMP), CAST('start' AS TIMESTAMP)) / 3",
+                "spark2": "SELECT CAST(MONTHS_BETWEEN(CAST('end' AS TIMESTAMP), CAST('start' AS TIMESTAMP)) AS INT) / 3",
                 "tsql": "SELECT DATEDIFF(quarter, CAST('start' AS DATETIME2), CAST('end' AS DATETIME2))",
             },
         )
@@ -1374,7 +1404,7 @@ FROM OPENJSON(@json) WITH (
     Date DATETIME2 '$.Order.Date',
     Customer VARCHAR(200) '$.AccountNumber',
     Quantity INTEGER '$.Item.Quantity',
-    "Order" TEXT AS JSON
+    "Order" VARCHAR(MAX) AS JSON
 )"""
             },
             pretty=True,

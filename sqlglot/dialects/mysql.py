@@ -21,7 +21,6 @@ from sqlglot.dialects.dialect import (
     no_trycast_sql,
     parse_date_delta_with_interval,
     rename_func,
-    simplify_literal,
     strposition_to_locate_sql,
 )
 from sqlglot.helper import seq_get
@@ -61,9 +60,33 @@ def _date_trunc_sql(self: MySQL.Generator, expression: exp.DateTrunc) -> str:
     return f"STR_TO_DATE({concat}, '{date_format}')"
 
 
-def _str_to_date(args: t.List) -> exp.StrToDate:
-    date_format = MySQL.format_time(seq_get(args, 1))
-    return exp.StrToDate(this=seq_get(args, 0), format=date_format)
+# All specifiers for time parts (as opposed to date parts)
+# https://dev.mysql.com/doc/refman/8.0/en/date-and-time-functions.html#function_date-format
+TIME_SPECIFIERS = {"f", "H", "h", "I", "i", "k", "l", "p", "r", "S", "s", "T"}
+
+
+def _has_time_specifier(date_format: str) -> bool:
+    i = 0
+    length = len(date_format)
+
+    while i < length:
+        if date_format[i] == "%":
+            i += 1
+            if i < length and date_format[i] in TIME_SPECIFIERS:
+                return True
+        i += 1
+    return False
+
+
+def _str_to_date(args: t.List) -> exp.StrToDate | exp.StrToTime:
+    mysql_date_format = seq_get(args, 1)
+    date_format = MySQL.format_time(mysql_date_format)
+    this = seq_get(args, 0)
+
+    if mysql_date_format and _has_time_specifier(mysql_date_format.name):
+        return exp.StrToTime(this=this, format=date_format)
+
+    return exp.StrToDate(this=this, format=date_format)
 
 
 def _str_to_date_sql(
@@ -94,7 +117,9 @@ def _date_add_sql(
     def func(self: MySQL.Generator, expression: exp.Expression) -> str:
         this = self.sql(expression, "this")
         unit = expression.text("unit").upper() or "DAY"
-        return f"DATE_{kind}({this}, {self.sql(exp.Interval(this=expression.expression.copy(), unit=unit))})"
+        return (
+            f"DATE_{kind}({this}, {self.sql(exp.Interval(this=expression.expression, unit=unit))})"
+        )
 
     return func
 
@@ -114,8 +139,6 @@ def _remove_ts_or_ds_to_date(
     args: t.Tuple[str, ...] = ("this",),
 ) -> t.Callable[[MySQL.Generator, exp.Func], str]:
     def func(self: MySQL.Generator, expression: exp.Func) -> str:
-        expression = expression.copy()
-
         for arg_key in args:
             arg = expression.args.get(arg_key)
             if isinstance(arg, exp.TsOrDsToDate) and not arg.args.get("format"):
@@ -636,6 +659,7 @@ class MySQL(Dialect):
                     transforms.eliminate_distinct_on,
                     transforms.eliminate_semi_and_anti_joins,
                     transforms.eliminate_qualify,
+                    transforms.eliminate_full_outer_join,
                 ]
             ),
             exp.StrPosition: strposition_to_locate_sql,
@@ -695,6 +719,8 @@ class MySQL(Dialect):
 
         LIMIT_FETCH = "LIMIT"
 
+        LIMIT_ONLY_LITERALS = True
+
         # MySQL doesn't support many datatypes in cast.
         # https://dev.mysql.com/doc/refman/8.0/en/cast-functions.html#function_cast
         CAST_MAPPING = {
@@ -718,16 +744,6 @@ class MySQL(Dialect):
                 result = f"{result} UNSIGNED"
             return result
 
-        def limit_sql(self, expression: exp.Limit, top: bool = False) -> str:
-            # MySQL requires simple literal values for its LIMIT clause.
-            expression = simplify_literal(expression.copy())
-            return super().limit_sql(expression, top=top)
-
-        def offset_sql(self, expression: exp.Offset) -> str:
-            # MySQL requires simple literal values for its OFFSET clause.
-            expression = simplify_literal(expression.copy())
-            return super().offset_sql(expression)
-
         def xor_sql(self, expression: exp.Xor) -> str:
             if expression.expressions:
                 return self.expressions(expression, sep=" XOR ")
@@ -743,7 +759,6 @@ class MySQL(Dialect):
             to = self.CAST_MAPPING.get(expression.to.this)
 
             if to:
-                expression = expression.copy()
                 expression.to.set("this", to)
             return super().cast_sql(expression)
 

@@ -1,6 +1,95 @@
 Changelog
 =========
 
+## [v18.17.0] - 2023-10-25
+### :boom: BREAKING CHANGES
+- due to [`c8e87b6`](https://github.com/tobymao/sqlglot/commit/c8e87b6cab18924b6fa307252f19e83eef4f2f03) - unnabreviate units, e.g. ms to millisecond *(PR [#2451](https://github.com/tobymao/sqlglot/pull/2451) by [@GeorgeSittas](https://github.com/GeorgeSittas))*:
+
+  unnabreviate units, e.g. ms to millisecond (#2451)
+
+
+### :sparkles: New Features
+- [`7ded253`](https://github.com/tobymao/sqlglot/commit/7ded2536f348a0470af044b56fa0fd6cfb09bb0d) - add support for {fn ...} function syntax *(PR [#2447](https://github.com/tobymao/sqlglot/pull/2447) by [@GeorgeSittas](https://github.com/GeorgeSittas))*
+- [`ee18756`](https://github.com/tobymao/sqlglot/commit/ee18756e8779f0267025e63789bddf99cdf631e0) - **snowflake**: register APPROX_TOP_K as AggFunc *(PR [#2450](https://github.com/tobymao/sqlglot/pull/2450) by [@GeorgeSittas](https://github.com/GeorgeSittas))*
+  - :arrow_lower_right: *addresses issue [#2449](undefined) opened by [@yogevyuval](https://github.com/yogevyuval)*
+- [`57b744a`](https://github.com/tobymao/sqlglot/commit/57b744a431614818cd84f65a8d6105655cd462a4) - **optimizer**: infer bracket type *(PR [#2441](https://github.com/tobymao/sqlglot/pull/2441) by [@GeorgeSittas](https://github.com/GeorgeSittas))*
+- [`64b18e6`](https://github.com/tobymao/sqlglot/commit/64b18e6555865e447723e8e4619e9eba399e7cee) - add ArgMax, ArgMin expressions, fix their transpilation *(PR [#2454](https://github.com/tobymao/sqlglot/pull/2454) by [@GeorgeSittas](https://github.com/GeorgeSittas))*
+  - :arrow_lower_right: *addresses issue [#2453](undefined) opened by [@erikcw](https://github.com/erikcw)*
+- [`959fa92`](https://github.com/tobymao/sqlglot/commit/959fa9212ee698029eb6e1957d4f2d22590fccb0) - **lineage**: terminal table node for select star *(PR [#2456](https://github.com/tobymao/sqlglot/pull/2456) by [@edpaget](https://github.com/edpaget))*
+
+### :bug: Bug Fixes
+- [`e11ecaf`](https://github.com/tobymao/sqlglot/commit/e11ecaf2e0c5225df7ea5ca6e5622be1e94b2625) - **clickhouse**: treat CURRENT_DATE as a function *(PR [#2439](https://github.com/tobymao/sqlglot/pull/2439) by [@GeorgeSittas](https://github.com/GeorgeSittas))*
+  - :arrow_lower_right: *fixes issue [#2438](undefined) opened by [@samuelcolvin](https://github.com/samuelcolvin)*
+- [`fdb1668`](https://github.com/tobymao/sqlglot/commit/fdb166801144b721677d23c195e5bd3d35ee8841) - improve bracket parsing error, set Slice type to Unknown *(PR [#2440](https://github.com/tobymao/sqlglot/pull/2440) by [@GeorgeSittas](https://github.com/GeorgeSittas))*
+  - :arrow_lower_right: *fixes issue [#2437](undefined) opened by [@samuelcolvin](https://github.com/samuelcolvin)*
+- [`546eb54`](https://github.com/tobymao/sqlglot/commit/546eb545f2f6a37408c41d013089f2f29e922eb3) - **redshift**: don't rewrite JSON_PARSE to PARSE_JSON *(commit by [@purcell](https://github.com/purcell))*
+- [`00e3515`](https://github.com/tobymao/sqlglot/commit/00e3515ff3157105d84f21f56cfb64bae3267640) - **parser**: treat 'use' as a valid identifier token *(PR [#2446](https://github.com/tobymao/sqlglot/pull/2446) by [@GeorgeSittas](https://github.com/GeorgeSittas))*
+  - :arrow_lower_right: *fixes issue [#2444](undefined) opened by [@CBQu](https://github.com/CBQu)*
+- [`c8e87b6`](https://github.com/tobymao/sqlglot/commit/c8e87b6cab18924b6fa307252f19e83eef4f2f03) - unnabreviate units, e.g. ms to millisecond *(PR [#2451](https://github.com/tobymao/sqlglot/pull/2451) by [@GeorgeSittas](https://github.com/GeorgeSittas))*
+  - :arrow_lower_right: *fixes issue [#2448](undefined) opened by [@samuelcolvin](https://github.com/samuelcolvin)*
+- [`11bfc75`](https://github.com/tobymao/sqlglot/commit/11bfc7518bb39938661c55d2de54ca0cbd042c6a) - **lineage**: handle unions with SELECT STAR *(PR [#2452](https://github.com/tobymao/sqlglot/pull/2452) by [@edpaget](https://github.com/edpaget))*
+- [`b856477`](https://github.com/tobymao/sqlglot/commit/b856477200faf552441a8d27adb5cff4b83dda65) - add table alias in unnest with columns only *(PR [#2457](https://github.com/tobymao/sqlglot/pull/2457) by [@GeorgeSittas](https://github.com/GeorgeSittas))*
+  - :arrow_lower_right: *fixes issue [#2455](undefined) opened by [@bgedik](https://github.com/bgedik)*
+
+### :wrench: Chores
+- [`927f5aa`](https://github.com/tobymao/sqlglot/commit/927f5aaf20155fe5c7e0a1c466eae19c59913045) - add docstrings in rest of transforms *(commit by [@GeorgeSittas](https://github.com/GeorgeSittas))*
+
+
+## [v18.16.1] - 2023-10-21
+### :sparkles: New Features
+- [`16fb83f`](https://github.com/tobymao/sqlglot/commit/16fb83ff3f9a2bd77ce3edfa6f4932916a033d4c) - **bigquery**: default collate closes [#2434](https://github.com/tobymao/sqlglot/pull/2434) *(commit by [@tobymao](https://github.com/tobymao))*
+
+### :bug: Bug Fixes
+- [`87efe41`](https://github.com/tobymao/sqlglot/commit/87efe41839a4f8e14e9b5dc0810156d06ae053a7) - **duckdb**: regexp_replace modifiers closes [#2436](https://github.com/tobymao/sqlglot/pull/2436) *(commit by [@tobymao](https://github.com/tobymao))*
+- [`be38964`](https://github.com/tobymao/sqlglot/commit/be3896441016f0356ca3d3c02f74deed6a63879e) - infinite loop due to uppercase expansion *(commit by [@tobymao](https://github.com/tobymao))*
+
+
+## [v18.16.0] - 2023-10-21
+### :bug: Bug Fixes
+- [`5b388bc`](https://github.com/tobymao/sqlglot/commit/5b388bc72aa8e9e01561b077ddbaeb1935894403) - attach comments to Union expressions *(PR [#2432](https://github.com/tobymao/sqlglot/pull/2432) by [@GeorgeSittas](https://github.com/GeorgeSittas))*
+  - :arrow_lower_right: *fixes issue [#2430](undefined) opened by [@SudarshanVS](https://github.com/SudarshanVS)*
+- [`e6721d1`](https://github.com/tobymao/sqlglot/commit/e6721d17d111b952c717e8a21b176e08a68226a7) - subquery lineage closes [#2431](https://github.com/tobymao/sqlglot/pull/2431) *(commit by [@tobymao](https://github.com/tobymao))*
+- [`b4f76eb`](https://github.com/tobymao/sqlglot/commit/b4f76eb6ff7a4bdb377c3aac8cbde886c3894416) - **clickhouse**: neq bug closes [#2435](https://github.com/tobymao/sqlglot/pull/2435) *(commit by [@tobymao](https://github.com/tobymao))*
+
+
+## [v18.15.1] - 2023-10-19
+### :sparkles: New Features
+- [`469226b`](https://github.com/tobymao/sqlglot/commit/469226b31443038ff2c28ce1a03c8c96df598f44) - **snowflake**: support for ALTER TABLE SWAP WITH *(PR [#2420](https://github.com/tobymao/sqlglot/pull/2420) by [@teraamp](https://github.com/teraamp))*
+- [`13a5df2`](https://github.com/tobymao/sqlglot/commit/13a5df2d20fa57efd4699ce93d98789666131173) - **lineage**: lineage from UDTFs that use columns *(PR [#2424](https://github.com/tobymao/sqlglot/pull/2424) by [@edpaget](https://github.com/edpaget))*
+- [`8d7e4e9`](https://github.com/tobymao/sqlglot/commit/8d7e4e9ec0ef639376d1b4db55f6578e1eb431d1) - show version in cli *(commit by [@tobymao](https://github.com/tobymao))*
+- [`88ddaa7`](https://github.com/tobymao/sqlglot/commit/88ddaa7f49327b37acdb6cd87b4189b872b964c1) - make data type build more flexible *(commit by [@tobymao](https://github.com/tobymao))*
+
+### :bug: Bug Fixes
+- [`e1186a5`](https://github.com/tobymao/sqlglot/commit/e1186a5c4c75e876aedb47185beef50396089650) - **redshift**: generate the IDENTITY constraint correctly *(PR [#2418](https://github.com/tobymao/sqlglot/pull/2418) by [@GeorgeSittas](https://github.com/GeorgeSittas))*
+- [`a00b5b5`](https://github.com/tobymao/sqlglot/commit/a00b5b56d5c2d197bb1d1d56bfeedb9c7ab40ddf) - smarter detection of timestamp() fallback to cast *(commit by [@tobymao](https://github.com/tobymao))*
+- [`c5028d4`](https://github.com/tobymao/sqlglot/commit/c5028d4a651f80aa2599cd69bfe486f8b7ce5d0f) - **teradata**: teradata only supports top closes [#2419](https://github.com/tobymao/sqlglot/pull/2419) *(commit by [@tobymao](https://github.com/tobymao))*
+- [`3173683`](https://github.com/tobymao/sqlglot/commit/31736832153872b0dcab067cea8b76970369e58a) - **snowflake**: map DAYOF[MONTH|YEAR] back to itself fixes [#2422](https://github.com/tobymao/sqlglot/pull/2422) *(commit by [@GeorgeSittas](https://github.com/GeorgeSittas))*
+- [`e612089`](https://github.com/tobymao/sqlglot/commit/e6120897fb46c4bbc90184d177d45df264e49768) - ts_or_ds reparse closes [#2428](https://github.com/tobymao/sqlglot/pull/2428) *(commit by [@tobymao](https://github.com/tobymao))*
+
+### :wrench: Chores
+- [`fda3576`](https://github.com/tobymao/sqlglot/commit/fda35766ee93e2e01ff1ee53ae804d6fe5109ce3) - fix type hint of swaptable_sql *(commit by [@GeorgeSittas](https://github.com/GeorgeSittas))*
+
+
+## [v18.15.0] - 2023-10-17
+### :bug: Bug Fixes
+- [`d75d760`](https://github.com/tobymao/sqlglot/commit/d75d760778973d88325e0b6d167243385140d698) - bigquery parse_json wide_number_mode *(commit by [@tobymao](https://github.com/tobymao))*
+
+
+## [v18.14.0] - 2023-10-17
+### :bug: Bug Fixes
+- [`4163d5f`](https://github.com/tobymao/sqlglot/commit/4163d5f8ad1d926830a4273d1e8f3ec4a059b13b) - make `RegexpILike` a subclass of `Binary` as well as `Func` *(PR [#2404](https://github.com/tobymao/sqlglot/pull/2404) by [@samuelcolvin](https://github.com/samuelcolvin))*
+- [`de0cd98`](https://github.com/tobymao/sqlglot/commit/de0cd98ff682868ecb2299425f52ea45a9b88f27) - clickhouse any -> has closes [#2408](https://github.com/tobymao/sqlglot/pull/2408) *(commit by [@tobymao](https://github.com/tobymao))*
+- [`463b6d6`](https://github.com/tobymao/sqlglot/commit/463b6d63ecdb6a0cf9b44716494aaad7f3efb26b) - **redshift**: add a missing retreat in the group by parser *(PR [#2412](https://github.com/tobymao/sqlglot/pull/2412) by [@GeorgeSittas](https://github.com/GeorgeSittas))*
+  - :arrow_lower_right: *fixes issue [#2411](undefined) opened by [@mrmammadov](https://github.com/mrmammadov)*
+- [`f8109be`](https://github.com/tobymao/sqlglot/commit/f8109be1b0b620c48db30b82519a5d17b992cce7) - **bigquery**: revert commit 09e2eeb, only reduce NULL for BQ at sqlgen time *(PR [#2414](https://github.com/tobymao/sqlglot/pull/2414) by [@GeorgeSittas](https://github.com/GeorgeSittas))*
+- [`f970f7c`](https://github.com/tobymao/sqlglot/commit/f970f7cd424747c4e18cd902cc99f55383e79dbc) - **clickhouse**: map RegexpILike to match *(PR [#2407](https://github.com/tobymao/sqlglot/pull/2407) by [@GeorgeSittas](https://github.com/GeorgeSittas))*
+  - :arrow_lower_right: *fixes issue [#2406](undefined) opened by [@samuelcolvin](https://github.com/samuelcolvin)*
+- [`1c8883f`](https://github.com/tobymao/sqlglot/commit/1c8883fa66fdc95c8166a7fba4d443dca6e8fd86) - clickhouse any transpilation closes [#2408](https://github.com/tobymao/sqlglot/pull/2408) *(commit by [@tobymao](https://github.com/tobymao))*
+- [`586de82`](https://github.com/tobymao/sqlglot/commit/586de8263b577e791355db39e9e3a0526fd7a1fc) - casting *(commit by [@tobymao](https://github.com/tobymao))*
+- [`d9958f9`](https://github.com/tobymao/sqlglot/commit/d9958f9438eecf8137361ab76f02acda63e59790) - presto/trino limit can only contain literals *(commit by [@tobymao](https://github.com/tobymao))*
+- [`7744648`](https://github.com/tobymao/sqlglot/commit/77446481dd59c213368fe554e8011e9a7f5c0f71) - trino view column and partition column *(PR [#2416](https://github.com/tobymao/sqlglot/pull/2416) by [@eakmanrq](https://github.com/eakmanrq))*
+
+
 ## [v18.13.0] - 2023-10-13
 ### :sparkles: New Features
 - [`e2e960a`](https://github.com/tobymao/sqlglot/commit/e2e960acfdd02cbb22689f1f0f5f00d50e4a537e) - **duckdb**: add parsing support for timestamp types with unit suffixes *(PR [#2400](https://github.com/tobymao/sqlglot/pull/2400) by [@cpcloud](https://github.com/cpcloud))*
@@ -1718,3 +1807,9 @@ Changelog
 [v18.11.6]: https://github.com/tobymao/sqlglot/compare/v18.11.5...v18.11.6
 [v18.12.0]: https://github.com/tobymao/sqlglot/compare/v18.11.6...v18.12.0
 [v18.13.0]: https://github.com/tobymao/sqlglot/compare/v18.12.0...v18.13.0
+[v18.14.0]: https://github.com/tobymao/sqlglot/compare/v18.13.0...v18.14.0
+[v18.15.0]: https://github.com/tobymao/sqlglot/compare/v18.14.0...v18.15.0
+[v18.15.1]: https://github.com/tobymao/sqlglot/compare/v18.15.0...v18.15.1
+[v18.16.0]: https://github.com/tobymao/sqlglot/compare/v18.15.1...v18.16.0
+[v18.16.1]: https://github.com/tobymao/sqlglot/compare/v18.16.0...v18.16.1
+[v18.17.0]: https://github.com/tobymao/sqlglot/compare/v18.16.1...v18.17.0

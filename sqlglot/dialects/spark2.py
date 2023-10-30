@@ -7,7 +7,6 @@ from sqlglot.dialects.dialect import (
     binary_from_function,
     format_time_lambda,
     is_parse_json,
-    move_insert_cte_sql,
     pivot_column_names,
     rename_func,
     trim_sql,
@@ -70,7 +69,9 @@ def _unalias_pivot(expression: exp.Expression) -> exp.Expression:
             alias = pivot.args["alias"].pop()
             return exp.From(
                 this=expression.this.replace(
-                    exp.select("*").from_(expression.this.copy()).subquery(alias=alias)
+                    exp.select("*")
+                    .from_(expression.this.copy(), copy=False)
+                    .subquery(alias=alias, copy=False)
                 )
             )
 
@@ -188,7 +189,6 @@ class Spark2(Hive):
             exp.DayOfYear: rename_func("DAYOFYEAR"),
             exp.FileFormatProperty: lambda self, e: f"USING {e.name.upper()}",
             exp.From: transforms.preprocess([_unalias_pivot]),
-            exp.Insert: move_insert_cte_sql,
             exp.LogicalAnd: rename_func("BOOL_AND"),
             exp.LogicalOr: rename_func("BOOL_OR"),
             exp.Map: _map_sql,

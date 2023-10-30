@@ -32,7 +32,7 @@ def _check_int(s: str) -> bool:
 
 
 # from https://docs.snowflake.com/en/sql-reference/functions/to_timestamp.html
-def _parse_to_timestamp(args: t.List) -> t.Union[exp.StrToTime, exp.UnixToTime]:
+def _parse_to_timestamp(args: t.List) -> t.Union[exp.StrToTime, exp.UnixToTime, exp.TimeStrToTime]:
     if len(args) == 2:
         first_arg, second_arg = args
         if second_arg.is_string:
@@ -60,8 +60,8 @@ def _parse_to_timestamp(args: t.List) -> t.Union[exp.StrToTime, exp.UnixToTime]:
     # reduce it using `simplify_literals` first and then check if it's a Literal.
     first_arg = seq_get(args, 0)
     if not isinstance(simplify_literals(first_arg, root=True), Literal):
-        # case: <variant_expr>
-        return format_time_lambda(exp.StrToTime, "snowflake", default=True)(args)
+        # case: <variant_expr> or other expressions such as columns
+        return exp.TimeStrToTime.from_arg_list(args)
 
     if first_arg.is_string:
         if _check_int(first_arg.this):
@@ -262,6 +262,7 @@ class Snowflake(Dialect):
             ),
             "DATEDIFF": _parse_datediff,
             "DIV0": _div0_to_if,
+            "FLATTEN": exp.Explode.from_arg_list,
             "IFF": exp.If.from_arg_list,
             "LISTAGG": exp.GroupConcat.from_arg_list,
             "NULLIFZERO": _nullifzero_to_if,
@@ -308,6 +309,7 @@ class Snowflake(Dialect):
                 expressions=self._parse_csv(self._parse_id_var),
                 unset=True,
             ),
+            "SWAP": lambda self: self._parse_alter_table_swap(),
         }
 
         STATEMENT_PARSERS = {
@@ -325,6 +327,22 @@ class Snowflake(Dialect):
             TokenType.MOD,
             TokenType.SLASH,
         }
+        FLATTEN_COLUMNS = ["SEQ", "KEY", "PATH", "INDEX", "VALUE", "THIS"]
+
+        def _parse_lateral(self) -> t.Optional[exp.Lateral]:
+            lateral = super()._parse_lateral()
+            if not lateral:
+                return lateral
+
+            if isinstance(lateral.this, exp.Explode):
+                table_alias = lateral.args.get("alias")
+                columns = [exp.to_identifier(col) for col in self.FLATTEN_COLUMNS]
+                if table_alias and not table_alias.args.get("columns"):
+                    table_alias.set("columns", columns)
+                elif not table_alias:
+                    exp.alias_(lateral, "_flattened", table=columns, copy=False)
+
+            return lateral
 
         def _parse_table_parts(self, schema: bool = False) -> exp.Table:
             # https://docs.snowflake.com/en/user-guide/querying-stage
@@ -389,6 +407,10 @@ class Snowflake(Dialect):
 
             return self.expression(exp.Show, this=this, scope=scope, scope_kind=scope_kind)
 
+        def _parse_alter_table_swap(self) -> exp.SwapTable:
+            self._match_text_seq("WITH")
+            return self.expression(exp.SwapTable, this=self._parse_table(schema=True))
+
     class Tokenizer(tokens.Tokenizer):
         STRING_ESCAPES = ["\\", "'"]
         HEX_STRINGS = [("x'", "'"), ("X'", "'")]
@@ -438,6 +460,8 @@ class Snowflake(Dialect):
 
         TRANSFORMS = {
             **generator.Generator.TRANSFORMS,
+            exp.ArgMax: rename_func("MAX_BY"),
+            exp.ArgMin: rename_func("MIN_BY"),
             exp.Array: inline_array_sql,
             exp.ArrayConcat: rename_func("ARRAY_CAT"),
             exp.ArrayJoin: rename_func("ARRAY_TO_STRING"),
@@ -451,7 +475,10 @@ class Snowflake(Dialect):
             ),
             exp.DateStrToDate: datestrtodate_sql,
             exp.DataType: _datatype_sql,
+            exp.DayOfMonth: rename_func("DAYOFMONTH"),
             exp.DayOfWeek: rename_func("DAYOFWEEK"),
+            exp.DayOfYear: rename_func("DAYOFYEAR"),
+            exp.Explode: rename_func("FLATTEN"),
             exp.Extract: rename_func("DATE_PART"),
             exp.GenerateSeries: lambda self, e: self.func(
                 "ARRAY_GENERATE_RANGE", e.args["start"], e.args["end"] + 1, e.args.get("step")
@@ -520,6 +547,12 @@ class Snowflake(Dialect):
             exp.VolatileProperty: exp.Properties.Location.UNSUPPORTED,
         }
 
+        def log_sql(self, expression: exp.Log) -> str:
+            if not expression.expression:
+                return self.func("LN", expression.this)
+
+            return super().log_sql(expression)
+
         def unnest_sql(self, expression: exp.Unnest) -> str:
             selects = ["value"]
             unnest_alias = expression.args.get("alias")
@@ -527,7 +560,6 @@ class Snowflake(Dialect):
             offset = expression.args.get("offset")
             if offset:
                 if unnest_alias:
-                    expression = expression.copy()
                     unnest_alias.append("columns", offset.pop())
 
                 selects.append("index")
@@ -596,3 +628,7 @@ class Snowflake(Dialect):
             increment = expression.args.get("increment")
             increment = f" INCREMENT {increment}" if increment else ""
             return f"AUTOINCREMENT{start}{increment}"
+
+        def swaptable_sql(self, expression: exp.SwapTable) -> str:
+            this = self.sql(expression, "this")
+            return f"SWAP WITH {this}"

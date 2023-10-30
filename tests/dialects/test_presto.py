@@ -367,6 +367,21 @@ class TestPresto(Validator):
             "CAST(x AS TIMESTAMP)",
             read={"mysql": "TIMESTAMP(x)"},
         )
+        self.validate_all(
+            "TIMESTAMP(x, 'America/Los_Angeles')",
+            write={
+                "duckdb": "CAST(x AS TIMESTAMP) AT TIME ZONE 'America/Los_Angeles'",
+                "presto": "CAST(x AS TIMESTAMP) AT TIME ZONE 'America/Los_Angeles'",
+            },
+        )
+        # this case isn't really correct, but it's a fall back for mysql's version
+        self.validate_all(
+            "TIMESTAMP(x, '12:00:00')",
+            write={
+                "duckdb": "TIMESTAMP(x, '12:00:00')",
+                "presto": "TIMESTAMP(x, '12:00:00')",
+            },
+        )
 
     def test_ddl(self):
         self.validate_all(
@@ -438,6 +453,22 @@ class TestPresto(Validator):
             write={
                 "presto": "SELECT fname, lname, age FROM person ORDER BY age DESC NULLS FIRST, fname ASC, lname",
                 "spark": "SELECT fname, lname, age FROM person ORDER BY age DESC NULLS FIRST, fname ASC NULLS LAST, lname NULLS LAST",
+            },
+        )
+
+        self.validate_all(
+            "CREATE OR REPLACE VIEW x (cola) SELECT 1 as cola",
+            write={
+                "spark": "CREATE OR REPLACE VIEW x (cola) AS SELECT 1 AS cola",
+                "presto": "CREATE OR REPLACE VIEW x AS SELECT 1 AS cola",
+            },
+        )
+
+        self.validate_all(
+            'CREATE TABLE IF NOT EXISTS x ("cola" INTEGER, "ds" TEXT) WITH (PARTITIONED BY=("ds"))',
+            write={
+                "spark": "CREATE TABLE IF NOT EXISTS x (`cola` INT, `ds` STRING) PARTITIONED BY (`ds`)",
+                "presto": """CREATE TABLE IF NOT EXISTS x ("cola" INTEGER, "ds" VARCHAR) WITH (PARTITIONED_BY=ARRAY['ds'])""",
             },
         )
 
@@ -527,6 +558,37 @@ class TestPresto(Validator):
             "SELECT SPLIT_TO_MAP('a:1;b:2;a:3', ';', ':', (k, v1, v2) -> CONCAT(v1, v2))"
         )
 
+        self.validate_all(
+            "SELECT MAX_BY(a.id, a.timestamp) FROM a",
+            read={
+                "bigquery": "SELECT MAX_BY(a.id, a.timestamp) FROM a",
+                "clickhouse": "SELECT argMax(a.id, a.timestamp) FROM a",
+                "duckdb": "SELECT MAX_BY(a.id, a.timestamp) FROM a",
+                "snowflake": "SELECT MAX_BY(a.id, a.timestamp) FROM a",
+                "spark": "SELECT MAX_BY(a.id, a.timestamp) FROM a",
+                "teradata": "SELECT MAX_BY(a.id, a.timestamp) FROM a",
+            },
+            write={
+                "bigquery": "SELECT MAX_BY(a.id, a.timestamp) FROM a",
+                "clickhouse": "SELECT argMax(a.id, a.timestamp) FROM a",
+                "duckdb": "SELECT ARG_MAX(a.id, a.timestamp) FROM a",
+                "presto": "SELECT MAX_BY(a.id, a.timestamp) FROM a",
+                "snowflake": "SELECT MAX_BY(a.id, a.timestamp) FROM a",
+                "spark": "SELECT MAX_BY(a.id, a.timestamp) FROM a",
+                "teradata": "SELECT MAX_BY(a.id, a.timestamp) FROM a",
+            },
+        )
+        self.validate_all(
+            "SELECT MIN_BY(a.id, a.timestamp, 3) FROM a",
+            write={
+                "clickhouse": "SELECT argMin(a.id, a.timestamp) FROM a",
+                "duckdb": "SELECT ARG_MIN(a.id, a.timestamp) FROM a",
+                "presto": "SELECT MIN_BY(a.id, a.timestamp, 3) FROM a",
+                "snowflake": "SELECT MIN_BY(a.id, a.timestamp, 3) FROM a",
+                "spark": "SELECT MIN_BY(a.id, a.timestamp) FROM a",
+                "teradata": "SELECT MIN_BY(a.id, a.timestamp, 3) FROM a",
+            },
+        )
         self.validate_all(
             """JSON '"foo"'""",
             write={

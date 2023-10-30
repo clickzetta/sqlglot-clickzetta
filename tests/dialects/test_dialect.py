@@ -99,6 +99,7 @@ class TestDialect(Validator):
                 "snowflake": "CAST(a AS TEXT)",
                 "spark": "CAST(a AS STRING)",
                 "starrocks": "CAST(a AS STRING)",
+                "tsql": "CAST(a AS VARCHAR(MAX))",
                 "doris": "CAST(a AS STRING)",
             },
         )
@@ -179,6 +180,7 @@ class TestDialect(Validator):
                 "snowflake": "CAST(a AS TEXT)",
                 "spark": "CAST(a AS STRING)",
                 "starrocks": "CAST(a AS STRING)",
+                "tsql": "CAST(a AS VARCHAR(MAX))",
                 "doris": "CAST(a AS STRING)",
             },
         )
@@ -197,6 +199,7 @@ class TestDialect(Validator):
                 "snowflake": "CAST(a AS VARCHAR)",
                 "spark": "CAST(a AS STRING)",
                 "starrocks": "CAST(a AS VARCHAR)",
+                "tsql": "CAST(a AS VARCHAR)",
                 "doris": "CAST(a AS VARCHAR)",
             },
         )
@@ -215,6 +218,7 @@ class TestDialect(Validator):
                 "snowflake": "CAST(a AS VARCHAR(3))",
                 "spark": "CAST(a AS VARCHAR(3))",
                 "starrocks": "CAST(a AS VARCHAR(3))",
+                "tsql": "CAST(a AS VARCHAR(3))",
                 "doris": "CAST(a AS VARCHAR(3))",
             },
         )
@@ -835,10 +839,6 @@ class TestDialect(Validator):
         )
         self.validate_all(
             "STR_TO_DATE(x, '%Y-%m-%dT%H:%M:%S')",
-            read={
-                "mysql": "STR_TO_DATE(x, '%Y-%m-%dT%H:%i:%S')",
-                "starrocks": "STR_TO_DATE(x, '%Y-%m-%dT%H:%i:%S')",
-            },
             write={
                 "drill": "TO_DATE(x, 'yyyy-MM-dd''T''HH:mm:ss')",
                 "mysql": "STR_TO_DATE(x, '%Y-%m-%dT%T')",
@@ -1855,5 +1855,43 @@ SELECT
                 "oracle": "SELECT * FROM (SELECT *, COUNT(*) OVER () AS _w FROM t) _t WHERE _w > 1",
                 "postgres": "SELECT * FROM (SELECT *, COUNT(*) OVER () AS _w FROM t) AS _t WHERE _w > 1",
                 "tsql": "SELECT * FROM (SELECT *, COUNT(*) OVER () AS _w FROM t) AS _t WHERE _w > 1",
+            },
+        )
+
+    def test_nested_ctes(self):
+        self.validate_all(
+            "SELECT * FROM (WITH t AS (SELECT 1 AS c) SELECT c FROM t) AS subq",
+            write={
+                "bigquery": "SELECT * FROM (WITH t AS (SELECT 1 AS c) SELECT c FROM t) AS subq",
+                "clickhouse": "SELECT * FROM (WITH t AS (SELECT 1 AS c) SELECT c FROM t) AS subq",
+                "databricks": "SELECT * FROM (WITH t AS (SELECT 1 AS c) SELECT c FROM t) AS subq",
+                "duckdb": "SELECT * FROM (WITH t AS (SELECT 1 AS c) SELECT c FROM t) AS subq",
+                "hive": "WITH t AS (SELECT 1 AS c) SELECT * FROM (SELECT c FROM t) AS subq",
+                "mysql": "SELECT * FROM (WITH t AS (SELECT 1 AS c) SELECT c FROM t) AS subq",
+                "postgres": "SELECT * FROM (WITH t AS (SELECT 1 AS c) SELECT c FROM t) AS subq",
+                "presto": "SELECT * FROM (WITH t AS (SELECT 1 AS c) SELECT c FROM t) AS subq",
+                "redshift": "SELECT * FROM (WITH t AS (SELECT 1 AS c) SELECT c FROM t) AS subq",
+                "snowflake": "SELECT * FROM (WITH t AS (SELECT 1 AS c) SELECT c FROM t) AS subq",
+                "spark": "SELECT * FROM (WITH t AS (SELECT 1 AS c) SELECT c FROM t) AS subq",
+                "spark2": "WITH t AS (SELECT 1 AS c) SELECT * FROM (SELECT c FROM t) AS subq",
+                "sqlite": "SELECT * FROM (WITH t AS (SELECT 1 AS c) SELECT c FROM t) AS subq",
+                "trino": "SELECT * FROM (WITH t AS (SELECT 1 AS c) SELECT c FROM t) AS subq",
+                "tsql": "WITH t AS (SELECT 1 AS c) SELECT * FROM (SELECT c FROM t) AS subq",
+            },
+        )
+        self.validate_all(
+            "SELECT * FROM (SELECT * FROM (WITH t AS (SELECT 1 AS c) SELECT c FROM t) AS subq1) AS subq2",
+            write={
+                "bigquery": "SELECT * FROM (SELECT * FROM (WITH t AS (SELECT 1 AS c) SELECT c FROM t) AS subq1) AS subq2",
+                "duckdb": "SELECT * FROM (SELECT * FROM (WITH t AS (SELECT 1 AS c) SELECT c FROM t) AS subq1) AS subq2",
+                "hive": "WITH t AS (SELECT 1 AS c) SELECT * FROM (SELECT * FROM (SELECT c FROM t) AS subq1) AS subq2",
+                "tsql": "WITH t AS (SELECT 1 AS c) SELECT * FROM (SELECT * FROM (SELECT c FROM t) AS subq1) AS subq2",
+            },
+        )
+        self.validate_all(
+            "WITH t1(x) AS (SELECT 1) SELECT * FROM (WITH t2(y) AS (SELECT 2) SELECT y FROM t2) AS subq",
+            write={
+                "duckdb": "WITH t1(x) AS (SELECT 1) SELECT * FROM (WITH t2(y) AS (SELECT 2) SELECT y FROM t2) AS subq",
+                "tsql": "WITH t1(x) AS (SELECT 1), t2(y) AS (SELECT 2) SELECT * FROM (SELECT y FROM t2) AS subq",
             },
         )

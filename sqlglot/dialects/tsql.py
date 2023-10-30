@@ -8,9 +8,9 @@ from sqlglot import exp, generator, parser, tokens, transforms
 from sqlglot.dialects.dialect import (
     Dialect,
     any_value_to_max_sql,
+    generatedasidentitycolumnconstraint_sql,
     max_or_greatest,
     min_or_least,
-    move_insert_cte_sql,
     parse_date_delta,
     rename_func,
     timestrtotime_sql,
@@ -157,8 +157,6 @@ def _format_sql(self: TSQL.Generator, expression: exp.NumberToStr | exp.TimeToSt
 
 
 def _string_agg_sql(self: TSQL.Generator, expression: exp.GroupConcat) -> str:
-    expression = expression.copy()
-
     this = expression.this
     distinct = expression.find(exp.Distinct)
     if distinct:
@@ -595,6 +593,8 @@ class TSQL(Dialect):
         ALTER_TABLE_ADD_COLUMN_KEYWORD = False
         LIMIT_FETCH = "FETCH"
         COMPUTED_COLUMN_WITH_TYPE = False
+        SUPPORTS_NESTED_CTES = False
+        CTE_RECURSIVE_KEYWORD_REQUIRED = False
 
         TYPE_MAPPING = {
             **generator.Generator.TYPE_MAPPING,
@@ -603,6 +603,7 @@ class TSQL(Dialect):
             exp.DataType.Type.DATETIME: "DATETIME2",
             exp.DataType.Type.DOUBLE: "FLOAT",
             exp.DataType.Type.INT: "INTEGER",
+            exp.DataType.Type.TEXT: "VARCHAR(MAX)",
             exp.DataType.Type.TIMESTAMP: "DATETIME2",
             exp.DataType.Type.TIMESTAMPTZ: "DATETIMEOFFSET",
             exp.DataType.Type.VARIANT: "SQL_VARIANT",
@@ -617,9 +618,9 @@ class TSQL(Dialect):
             exp.CurrentDate: rename_func("GETDATE"),
             exp.CurrentTimestamp: rename_func("GETDATE"),
             exp.Extract: rename_func("DATEPART"),
+            exp.GeneratedAsIdentityColumnConstraint: generatedasidentitycolumnconstraint_sql,
             exp.GroupConcat: _string_agg_sql,
             exp.If: rename_func("IIF"),
-            exp.Insert: move_insert_cte_sql,
             exp.Max: max_or_greatest,
             exp.MD5: lambda self, e: self.func("HASHBYTES", exp.Literal.string("MD5"), e.this),
             exp.Min: min_or_least,
@@ -682,7 +683,6 @@ class TSQL(Dialect):
             return sql
 
         def create_sql(self, expression: exp.Create) -> str:
-            expression = expression.copy()
             kind = self.sql(expression, "kind").upper()
             exists = expression.args.pop("exists", None)
             sql = super().create_sql(expression)
@@ -711,7 +711,7 @@ class TSQL(Dialect):
             elif expression.args.get("replace"):
                 sql = sql.replace("CREATE OR REPLACE ", "CREATE OR ALTER ", 1)
 
-            return sql
+            return self.prepend_ctes(expression, sql)
 
         def offset_sql(self, expression: exp.Offset) -> str:
             return f"{super().offset_sql(expression)} ROWS"
@@ -778,11 +778,3 @@ class TSQL(Dialect):
             this = self.sql(expression, "this")
             expressions = self.expressions(expression, flat=True, sep=" ")
             return f"CONSTRAINT {this} {expressions}"
-
-        # https://learn.microsoft.com/en-us/answers/questions/448821/create-table-in-sql-server
-        def generatedasidentitycolumnconstraint_sql(
-            self, expression: exp.GeneratedAsIdentityColumnConstraint
-        ) -> str:
-            start = self.sql(expression, "start") or "1"
-            increment = self.sql(expression, "increment") or "1"
-            return f"IDENTITY({start}, {increment})"

@@ -3,7 +3,7 @@ from __future__ import annotations
 import typing as t
 
 from sqlglot import exp, generator, parser, tokens, transforms
-from sqlglot.dialects.dialect import Dialect, max_or_greatest, min_or_least
+from sqlglot.dialects.dialect import Dialect, max_or_greatest, min_or_least, rename_func
 from sqlglot.tokens import TokenType
 
 
@@ -38,12 +38,14 @@ class Teradata(Dialect):
             "^=": TokenType.NEQ,
             "BYTEINT": TokenType.SMALLINT,
             "COLLECT": TokenType.COMMAND,
+            "EQ": TokenType.EQ,
             "GE": TokenType.GTE,
             "GT": TokenType.GT,
             "HELP": TokenType.COMMAND,
             "INS": TokenType.INSERT,
             "LE": TokenType.LTE,
             "LT": TokenType.LT,
+            "MINUS": TokenType.EXCEPT,
             "MOD": TokenType.MOD,
             "NE": TokenType.NEQ,
             "NOT=": TokenType.NEQ,
@@ -150,6 +152,7 @@ class Teradata(Dialect):
             return self.expression(exp.RangeN, this=this, expressions=expressions, each=each)
 
     class Generator(generator.Generator):
+        LIMIT_IS_TOP = True
         JOIN_HINTS = False
         TABLE_HINTS = False
         QUERY_HINTS = False
@@ -168,6 +171,8 @@ class Teradata(Dialect):
 
         TRANSFORMS = {
             **generator.Generator.TRANSFORMS,
+            exp.ArgMax: rename_func("MAX_BY"),
+            exp.ArgMin: rename_func("MIN_BY"),
             exp.Max: max_or_greatest,
             exp.Min: min_or_least,
             exp.Select: transforms.preprocess(

@@ -564,8 +564,22 @@ class TestMySQL(Validator):
             "STR_TO_DATE(x, '%M')",
             read={"": "TS_OR_DS_TO_DATE(x, '%B')"},
         )
+        self.validate_all(
+            "STR_TO_DATE(x, '%Y-%m-%d')",
+            write={"presto": "CAST(DATE_PARSE(x, '%Y-%m-%d') AS DATE)"},
+        )
+        self.validate_all(
+            "STR_TO_DATE(x, '%Y-%m-%dT%T')", write={"presto": "DATE_PARSE(x, '%Y-%m-%dT%T')"}
+        )
 
     def test_mysql(self):
+        self.validate_all(
+            # MySQL doesn't support FULL OUTER joins
+            "SELECT * FROM t1 LEFT OUTER JOIN t2 ON t1.x = t2.x UNION SELECT * FROM t1 RIGHT OUTER JOIN t2 ON t1.x = t2.x",
+            read={
+                "postgres": "SELECT * FROM t1 FULL OUTER JOIN t2 ON t1.x = t2.x",
+            },
+        )
         self.validate_all(
             "a XOR b",
             read={
@@ -586,6 +600,8 @@ class TestMySQL(Validator):
             write={
                 "mysql": "SELECT * FROM test LIMIT 1 OFFSET 1",
                 "postgres": "SELECT * FROM test LIMIT 0 + 1 OFFSET 0 + 1",
+                "presto": "SELECT * FROM test OFFSET 1 LIMIT 1",
+                "trino": "SELECT * FROM test OFFSET 1 LIMIT 1",
             },
         )
         self.validate_all(
