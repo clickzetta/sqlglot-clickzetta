@@ -1,4 +1,5 @@
 from __future__ import annotations
+import typing as t
 
 from sqlglot import exp, transforms
 from sqlglot.dialects.spark import Spark
@@ -118,3 +119,29 @@ class ClickZetta(Spark):
                 return f"DATE_FORMAT({self.sql(this)}, {self.sql(format_str)})"
 
             return super().tochar_sql(expression)
+
+        def maybe_comment(self, sql: str, expression: exp.Expression | None = None, comments: List[str] | None = None) -> str:
+            comments = (
+                ((expression and expression.comments) if comments is None else comments)  # type: ignore
+                if self.comments
+                else None
+            )
+
+            if not comments or isinstance(expression, self.EXCLUDE_COMMENTS):
+                return sql
+
+            comments_sql = "\n".join(
+                f"-- {self.pad_comment(comment)}" for comment in comments if comment
+            )
+
+            if not comments_sql:
+                return sql
+
+            if isinstance(expression, self.WITH_SEPARATED_COMMENTS):
+                return (
+                    f"{self.sep()}{comments_sql}{sql}"
+                    if sql[0].isspace()
+                    else f"{comments_sql}{self.sep()}{sql}"
+                )
+
+            return f"{sql} {comments_sql}"
