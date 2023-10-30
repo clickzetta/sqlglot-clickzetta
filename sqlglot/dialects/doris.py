@@ -22,10 +22,6 @@ class Doris(MySQL):
             **MySQL.Parser.FUNCTIONS,
             "DATE_TRUNC": parse_timestamp_trunc,
             "REGEXP": exp.RegexpLike.from_arg_list,
-            "GET_JSON_STRING": exp.JSONExtractScalar.from_arg_list,
-            "GET_JSON_BIGINT": exp.JSONExtractScalar.from_arg_list,
-            "GET_JSON_INT": exp.JSONExtractScalar.from_arg_list,
-            "GET_JSON_DOUBLE": exp.JSONExtractScalar.from_arg_list,
         }
 
         FUNCTION_PARSERS = {
