@@ -855,12 +855,18 @@ WHERE
 
     def test_datename(self):
         self.validate_all(
-            "SELECT DATENAME(mm,'1970-01-01')",
-            write={"spark": "SELECT DATE_FORMAT(CAST('1970-01-01' AS TIMESTAMP), 'MMMM')"},
+            "SELECT DATENAME(mm, '1970-01-01')",
+            write={
+                "spark": "SELECT DATE_FORMAT(CAST('1970-01-01' AS TIMESTAMP), 'MMMM')",
+                "tsql": "SELECT FORMAT(CAST('1970-01-01' AS DATETIME2), 'MMMM')",
+            },
         )
         self.validate_all(
-            "SELECT DATENAME(dw,'1970-01-01')",
-            write={"spark": "SELECT DATE_FORMAT(CAST('1970-01-01' AS TIMESTAMP), 'EEEE')"},
+            "SELECT DATENAME(dw, '1970-01-01')",
+            write={
+                "spark": "SELECT DATE_FORMAT(CAST('1970-01-01' AS TIMESTAMP), 'EEEE')",
+                "tsql": "SELECT FORMAT(CAST('1970-01-01' AS DATETIME2), 'dddd')",
+            },
         )
 
     def test_datepart(self):
@@ -1284,6 +1290,26 @@ WHERE
                 "spark": "SELECT * FROM mytemptable",
                 "tsql": "SELECT * FROM ##mytemptable",
             },
+        )
+
+    def test_temporal_table(self):
+        self.validate_identity(
+            """CREATE TABLE test ("data" CHAR(7), "valid_from" DATETIME2(2) GENERATED ALWAYS AS ROW START NOT NULL, "valid_to" DATETIME2(2) GENERATED ALWAYS AS ROW END NOT NULL, PERIOD FOR SYSTEM_TIME ("valid_from", "valid_to")) WITH(SYSTEM_VERSIONING=ON)"""
+        )
+        self.validate_identity(
+            """CREATE TABLE test ("data" CHAR(7), "valid_from" DATETIME2(2) GENERATED ALWAYS AS ROW START HIDDEN NOT NULL, "valid_to" DATETIME2(2) GENERATED ALWAYS AS ROW END HIDDEN NOT NULL, PERIOD FOR SYSTEM_TIME ("valid_from", "valid_to")) WITH(SYSTEM_VERSIONING=ON(HISTORY_TABLE="dbo"."benchmark_history", DATA_CONSISTENCY_CHECK=ON))"""
+        )
+        self.validate_identity(
+            """CREATE TABLE test ("data" CHAR(7), "valid_from" DATETIME2(2) GENERATED ALWAYS AS ROW START NOT NULL, "valid_to" DATETIME2(2) GENERATED ALWAYS AS ROW END NOT NULL, PERIOD FOR SYSTEM_TIME ("valid_from", "valid_to")) WITH(SYSTEM_VERSIONING=ON(HISTORY_TABLE="dbo"."benchmark_history", DATA_CONSISTENCY_CHECK=ON))"""
+        )
+        self.validate_identity(
+            """CREATE TABLE test ("data" CHAR(7), "valid_from" DATETIME2(2) GENERATED ALWAYS AS ROW START NOT NULL, "valid_to" DATETIME2(2) GENERATED ALWAYS AS ROW END NOT NULL, PERIOD FOR SYSTEM_TIME ("valid_from", "valid_to")) WITH(SYSTEM_VERSIONING=ON(HISTORY_TABLE="dbo"."benchmark_history", DATA_CONSISTENCY_CHECK=OFF))"""
+        )
+        self.validate_identity(
+            """CREATE TABLE test ("data" CHAR(7), "valid_from" DATETIME2(2) GENERATED ALWAYS AS ROW START NOT NULL, "valid_to" DATETIME2(2) GENERATED ALWAYS AS ROW END NOT NULL, PERIOD FOR SYSTEM_TIME ("valid_from", "valid_to")) WITH(SYSTEM_VERSIONING=ON(HISTORY_TABLE="dbo"."benchmark_history"))"""
+        )
+        self.validate_identity(
+            """CREATE TABLE test ("data" CHAR(7), "valid_from" DATETIME2(2) GENERATED ALWAYS AS ROW START NOT NULL, "valid_to" DATETIME2(2) GENERATED ALWAYS AS ROW END NOT NULL, PERIOD FOR SYSTEM_TIME ("valid_from", "valid_to")) WITH(SYSTEM_VERSIONING=ON(HISTORY_TABLE="dbo"."benchmark_history"))"""
         )
 
     def test_system_time(self):

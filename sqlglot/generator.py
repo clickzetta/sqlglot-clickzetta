@@ -335,6 +335,7 @@ class Generator:
         exp.VolatileProperty: exp.Properties.Location.POST_CREATE,
         exp.WithDataProperty: exp.Properties.Location.POST_EXPRESSION,
         exp.WithJournalTableProperty: exp.Properties.Location.POST_NAME,
+        exp.WithSystemVersioningProperty: exp.Properties.Location.POST_SCHEMA,
     }
 
     # Keywords that can't be used as unquoted identifier names
@@ -751,6 +752,18 @@ class Generator:
         expr = f"({expr})" if expr else "IDENTITY"
 
         return f"GENERATED{this} AS {expr}{sequence_opts}"
+
+    def generatedasrowcolumnconstraint_sql(
+        self, expression: exp.GeneratedAsRowColumnConstraint
+    ) -> str:
+        start = "START" if expression.args["start"] else "END"
+        hidden = " HIDDEN" if expression.args.get("hidden") else ""
+        return f"GENERATED ALWAYS AS ROW {start}{hidden}"
+
+    def periodforsystemtimeconstraint_sql(
+        self, expression: exp.PeriodForSystemTimeConstraint
+    ) -> str:
+        return f"PERIOD FOR SYSTEM_TIME ({self.sql(expression, 'this')}, {self.sql(expression, 'expression')})"
 
     def notnullcolumnconstraint_sql(self, expression: exp.NotNullColumnConstraint) -> str:
         return f"{'' if expression.args.get('allow_null') else 'NOT '}NULL"
@@ -1285,6 +1298,21 @@ class Generator:
         if statistics is not None:
             statistics_sql = f" AND {'NO ' if not statistics else ''}STATISTICS"
         return f"{data_sql}{statistics_sql}"
+
+    def withsystemversioningproperty_sql(self, expression: exp.WithSystemVersioningProperty) -> str:
+        sql = "WITH(SYSTEM_VERSIONING=ON"
+
+        if expression.this:
+            history_table = self.sql(expression, "this")
+            sql = f"{sql}(HISTORY_TABLE={history_table}"
+
+            if expression.expression:
+                data_consistency_check = self.sql(expression, "expression")
+                sql = f"{sql}, DATA_CONSISTENCY_CHECK={data_consistency_check}"
+
+            sql = f"{sql})"
+
+        return f"{sql})"
 
     def insert_sql(self, expression: exp.Insert) -> str:
         overwrite = expression.args.get("overwrite")
@@ -2400,7 +2428,9 @@ class Generator:
     def cast_sql(self, expression: exp.Cast, safe_prefix: t.Optional[str] = None) -> str:
         format_sql = self.sql(expression, "format")
         format_sql = f" FORMAT {format_sql}" if format_sql else ""
-        return f"{safe_prefix or ''}CAST({self.sql(expression, 'this')} AS {self.sql(expression, 'to')}{format_sql})"
+        to_sql = self.sql(expression, "to")
+        to_sql = f" {to_sql}" if to_sql else ""
+        return f"{safe_prefix or ''}CAST({self.sql(expression, 'this')} AS{to_sql}{format_sql})"
 
     def currentdate_sql(self, expression: exp.CurrentDate) -> str:
         zone = self.sql(expression, "this")
@@ -2491,14 +2521,7 @@ class Generator:
         actions = expression.args["actions"]
 
         if isinstance(actions[0], exp.ColumnDef):
-            if self.ALTER_TABLE_ADD_COLUMN_KEYWORD:
-                actions = self.expressions(
-                    expression,
-                    key="actions",
-                    prefix="ADD COLUMN ",
-                )
-            else:
-                actions = f"ADD {self.expressions(expression, key='actions')}"
+            actions = self.add_column_sql(expression)
         elif isinstance(actions[0], exp.Schema):
             actions = self.expressions(expression, key="actions", prefix="ADD COLUMNS ")
         elif isinstance(actions[0], exp.Delete):
@@ -2509,6 +2532,15 @@ class Generator:
         exists = " IF EXISTS" if expression.args.get("exists") else ""
         only = " ONLY" if expression.args.get("only") else ""
         return f"ALTER TABLE{exists}{only} {self.sql(expression, 'this')} {actions}"
+
+    def add_column_sql(self, expression: exp.AlterTable) -> str:
+        if self.ALTER_TABLE_ADD_COLUMN_KEYWORD:
+            return self.expressions(
+                expression,
+                key="actions",
+                prefix="ADD COLUMN ",
+            )
+        return f"ADD {self.expressions(expression, key='actions', flat=True)}"
 
     def droppartition_sql(self, expression: exp.DropPartition) -> str:
         expressions = self.expressions(expression)
@@ -2960,6 +2992,11 @@ class Generator:
         table = f"TABLE {table}" if not isinstance(expression.expression, exp.Subquery) else table
         parameters = self.sql(expression, "params_struct")
         return self.func("PREDICT", model, table, parameters or None)
+
+    def forin_sql(self, expression: exp.ForIn) -> str:
+        this = self.sql(expression, "this")
+        expression_sql = self.sql(expression, "expression")
+        return f"FOR {this} DO {expression_sql}"
 
     def _simplify_unless_literal(self, expression: E) -> E:
         if not isinstance(expression, exp.Literal):

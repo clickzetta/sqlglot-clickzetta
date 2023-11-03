@@ -33,11 +33,14 @@ class Teradata(Dialect):
 
     class Tokenizer(tokens.Tokenizer):
         # https://docs.teradata.com/r/Teradata-Database-SQL-Functions-Operators-Expressions-and-Predicates/March-2017/Comparison-Operators-and-Functions/Comparison-Operators/ANSI-Compliance
+        # https://docs.teradata.com/r/SQL-Functions-Operators-Expressions-and-Predicates/June-2017/Arithmetic-Trigonometric-Hyperbolic-Operators/Functions
         KEYWORDS = {
             **tokens.Tokenizer.KEYWORDS,
+            "**": TokenType.DSTAR,
             "^=": TokenType.NEQ,
             "BYTEINT": TokenType.SMALLINT,
             "COLLECT": TokenType.COMMAND,
+            "DEL": TokenType.DELETE,
             "EQ": TokenType.EQ,
             "GE": TokenType.GTE,
             "GT": TokenType.GT,
@@ -53,6 +56,7 @@ class Teradata(Dialect):
             "SEL": TokenType.SELECT,
             "ST_GEOMETRY": TokenType.GEOMETRY,
             "TOP": TokenType.TOP,
+            "UPD": TokenType.UPDATE,
         }
 
         # Teradata does not support % as a modulo operator
@@ -110,8 +114,14 @@ class Teradata(Dialect):
 
         FUNCTION_PARSERS = {
             **parser.Parser.FUNCTION_PARSERS,
+            # https://docs.teradata.com/r/SQL-Functions-Operators-Expressions-and-Predicates/June-2017/Data-Type-Conversions/TRYCAST
+            "TRYCAST": parser.Parser.FUNCTION_PARSERS["TRY_CAST"],
             "RANGE_N": lambda self: self._parse_rangen(),
             "TRANSLATE": lambda self: self._parse_translate(self.STRICT_CAST),
+        }
+
+        EXPONENT = {
+            TokenType.DSTAR: exp.Pow,
         }
 
         def _parse_translate(self, strict: bool) -> exp.Expression:
@@ -175,6 +185,7 @@ class Teradata(Dialect):
             exp.ArgMin: rename_func("MIN_BY"),
             exp.Max: max_or_greatest,
             exp.Min: min_or_least,
+            exp.Pow: lambda self, e: self.binary(e, "**"),
             exp.Select: transforms.preprocess(
                 [transforms.eliminate_distinct_on, transforms.eliminate_semi_and_anti_joins]
             ),
@@ -182,6 +193,16 @@ class Teradata(Dialect):
             exp.ToChar: lambda self, e: self.function_fallback_sql(e),
             exp.Use: lambda self, e: f"DATABASE {self.sql(e, 'this')}",
         }
+
+        def cast_sql(self, expression: exp.Cast, safe_prefix: t.Optional[str] = None) -> str:
+            if expression.to.this == exp.DataType.Type.UNKNOWN and expression.args.get("format"):
+                # We don't actually want to print the unknown type in CAST(<value> AS FORMAT <format>)
+                expression.to.pop()
+
+            return super().cast_sql(expression, safe_prefix=safe_prefix)
+
+        def trycast_sql(self, expression: exp.TryCast) -> str:
+            return self.cast_sql(expression, safe_prefix="TRY")
 
         def tablesample_sql(
             self, expression: exp.TableSample, seed_prefix: str = "SEED", sep=" AS "

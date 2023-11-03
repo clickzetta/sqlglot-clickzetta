@@ -1297,6 +1297,10 @@ class AutoIncrementColumnConstraint(ColumnConstraintKind):
     pass
 
 
+class PeriodForSystemTimeConstraint(ColumnConstraintKind):
+    arg_types = {"this": True, "expression": True}
+
+
 class CaseSpecificColumnConstraint(ColumnConstraintKind):
     arg_types = {"not_": True}
 
@@ -1349,6 +1353,10 @@ class GeneratedAsIdentityColumnConstraint(ColumnConstraintKind):
         "maxvalue": False,
         "cycle": False,
     }
+
+
+class GeneratedAsRowColumnConstraint(ColumnConstraintKind):
+    arg_types = {"start": True, "hidden": False}
 
 
 # https://dev.mysql.com/doc/refman/8.0/en/create-table.html
@@ -2257,6 +2265,11 @@ class WithDataProperty(Property):
 
 class WithJournalTableProperty(Property):
     arg_types = {"this": True}
+
+
+class WithSystemVersioningProperty(Property):
+    # this -> history table name, expression -> data consistency check
+    arg_types = {"this": False, "expression": False}
 
 
 class Properties(Expression):
@@ -4077,6 +4090,11 @@ class In(Predicate):
     }
 
 
+# https://cloud.google.com/bigquery/docs/reference/standard-sql/procedural-language#for-in
+class ForIn(Expression):
+    arg_types = {"this": True, "expression": True}
+
+
 class TimeUnit(Expression):
     """Automatically converts unit arg into a var."""
 
@@ -5051,7 +5069,7 @@ class FromBase(Func):
 
 
 class Struct(Func):
-    arg_types = {"expressions": True}
+    arg_types = {"expressions": False}
     is_var_len_args = True
 
 
@@ -5894,7 +5912,7 @@ def to_identifier(name, quoted=None, copy=True):
     Args:
         name: The name to turn into an identifier.
         quoted: Whether or not force quote the identifier.
-        copy: Whether or not to copy a passed in Identefier node.
+        copy: Whether or not to copy name if it's an Identifier.
 
     Returns:
         The identifier ast node.
@@ -5913,6 +5931,25 @@ def to_identifier(name, quoted=None, copy=True):
     else:
         raise ValueError(f"Name needs to be a string or an Identifier, got: {name.__class__}")
     return identifier
+
+
+def parse_identifier(name: str | Identifier, dialect: DialectType = None) -> Identifier:
+    """
+    Parses a given string into an identifier.
+
+    Args:
+        name: The name to parse into an identifier.
+        dialect: The dialect to parse against.
+
+    Returns:
+        The identifier ast node.
+    """
+    try:
+        expression = maybe_parse(name, dialect=dialect, into=Identifier)
+    except ParseError:
+        expression = to_identifier(name)
+
+    return expression
 
 
 INTERVAL_STRING_RE = re.compile(r"\s*([0-9]+)\s*([a-zA-Z]+)\s*")

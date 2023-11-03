@@ -1,6 +1,74 @@
 Changelog
 =========
 
+## [v19.0.3] - 2023-11-02
+### :bug: Bug Fixes
+- [`cdaf832`](https://github.com/tobymao/sqlglot/commit/cdaf832a392549f2910d97f1659c2dce0b0a6cf4) - **planner**: missing step of subquery *(PR [#2503](https://github.com/tobymao/sqlglot/pull/2503) by [@Thearas](https://github.com/Thearas))*
+
+### :wrench: Chores
+- [`c51d9ae`](https://github.com/tobymao/sqlglot/commit/c51d9ae7c45a66d32b4264712cc7d652964411fa) - fix type hint for normalize_identifiers *(PR [#2505](https://github.com/tobymao/sqlglot/pull/2505) by [@GeorgeSittas](https://github.com/GeorgeSittas))*
+
+
+## [v19.0.2] - 2023-11-01
+### :sparkles: New Features
+- [`3d60f0e`](https://github.com/tobymao/sqlglot/commit/3d60f0edd570ba51660110e3752d57a783b172ed) - **optimizer**: more date function coercion *(PR [#2493](https://github.com/tobymao/sqlglot/pull/2493) by [@barakalon](https://github.com/barakalon))*
+- [`01c1abb`](https://github.com/tobymao/sqlglot/commit/01c1abb8fb1ff3d4e96c7aae203e3a137960b5a3) - **tsql**: add period constraint, system versioning property, generate as row *(PR [#2484](https://github.com/tobymao/sqlglot/pull/2484) by [@Rik-de-Kort](https://github.com/Rik-de-Kort))*
+- [`b18235b`](https://github.com/tobymao/sqlglot/commit/b18235bb8a31a189cb634548db350282935a2991) - use parse_identifiers in qualify tables *(PR [#2502](https://github.com/tobymao/sqlglot/pull/2502) by [@tobymao](https://github.com/tobymao))*
+
+### :bug: Bug Fixes
+- [`471591c`](https://github.com/tobymao/sqlglot/commit/471591ce3e499d695541defdcfdc27cc07f01907) - **teradata**: support `TRYCAST` *(PR [#2496](https://github.com/tobymao/sqlglot/pull/2496) by [@hsheth2](https://github.com/hsheth2))*
+- [`5cdbdf6`](https://github.com/tobymao/sqlglot/commit/5cdbdf6c102c37d91ee335cbe123a8aa3596e310) - **teradata**: support `**` for exponent *(PR [#2495](https://github.com/tobymao/sqlglot/pull/2495) by [@hsheth2](https://github.com/hsheth2))*
+- [`70227fc`](https://github.com/tobymao/sqlglot/commit/70227fc8506d765ff7ac25606623a33ec0408284) - **postgres**: allow opclass types to be namespaced *(PR [#2499](https://github.com/tobymao/sqlglot/pull/2499) by [@GeorgeSittas](https://github.com/GeorgeSittas))*
+  - :arrow_lower_right: *fixes issue [#2498](undefined) opened by [@Nitrino](https://github.com/Nitrino)*
+- [`b434717`](https://github.com/tobymao/sqlglot/commit/b4347170891fac6c1fb29084032fe4dc01844711) - **tsql**: improve support for SYSTEM_VERSIONING *(PR [#2501](https://github.com/tobymao/sqlglot/pull/2501) by [@GeorgeSittas](https://github.com/GeorgeSittas))*
+- [`8691e1a`](https://github.com/tobymao/sqlglot/commit/8691e1acaaaa2906da163e210593244f55b56093) - **oracle**: alter table add multiple columns closes [#2500](https://github.com/tobymao/sqlglot/pull/2500) *(commit by [@tobymao](https://github.com/tobymao))*
+
+### :wrench: Chores
+- [`808b0bb`](https://github.com/tobymao/sqlglot/commit/808b0bbc4781bd671f52169259434f7ad656e004) - skip branch if no exponent parsing *(commit by [@tobymao](https://github.com/tobymao))*
+
+
+## [v19.0.1] - 2023-10-31
+### :sparkles: New Features
+- [`12596fd`](https://github.com/tobymao/sqlglot/commit/12596fdb83504b0e3e5f06132041771680c2560b) - support teradata as format no type closes [#2485](https://github.com/tobymao/sqlglot/pull/2485) *(PR [#2486](https://github.com/tobymao/sqlglot/pull/2486) by [@tobymao](https://github.com/tobymao))*
+- [`f25b61c`](https://github.com/tobymao/sqlglot/commit/f25b61c084435f77e66dd980e9e4aec42f33b99d) - **redshift**: add support for DATE_DIFF *(PR [#2491](https://github.com/tobymao/sqlglot/pull/2491) by [@GeorgeSittas](https://github.com/GeorgeSittas))*
+
+### :bug: Bug Fixes
+- [`83ecc5a`](https://github.com/tobymao/sqlglot/commit/83ecc5afb9be5ca3f7c6db3ca9f91e18aec93b88) - get rid of UNKNOWN type mapping in base Generator class *(PR [#2487](https://github.com/tobymao/sqlglot/pull/2487) by [@GeorgeSittas](https://github.com/GeorgeSittas))*
+- [`22990ef`](https://github.com/tobymao/sqlglot/commit/22990efde00043ea1ede769aacc83f314ea920ae) - qualify catalog only if db is present *(PR [#2489](https://github.com/tobymao/sqlglot/pull/2489) by [@eakmanrq](https://github.com/eakmanrq))*
+- [`8e20328`](https://github.com/tobymao/sqlglot/commit/8e203288adcbb45b23bfbb57416333ef6f91e370) - **schema**: use to_identifier as fallback when normalizing names *(PR [#2492](https://github.com/tobymao/sqlglot/pull/2492) by [@GeorgeSittas](https://github.com/GeorgeSittas))*
+- [`f6c34b0`](https://github.com/tobymao/sqlglot/commit/f6c34b08d17b5c5c6aadeac362a4c85b4688b987) - **teradata**: add UPD and DEL abbreviations *(PR [#2494](https://github.com/tobymao/sqlglot/pull/2494) by [@hsheth2](https://github.com/hsheth2))*
+
+
+## [v19.0.0] - 2023-10-30
+### :boom: BREAKING CHANGES
+- due to [`7a6da28`](https://github.com/tobymao/sqlglot/commit/7a6da28907ef519b954bc813fe180c306fe5006b) - generator now always copies, making transforms much simpler *(PR [#2477](https://github.com/tobymao/sqlglot/pull/2477) by [@tobymao](https://github.com/tobymao))*:
+
+  generator now always copies, making transforms much simpler (#2477)
+
+
+### :sparkles: New Features
+- [`542ea6c`](https://github.com/tobymao/sqlglot/commit/542ea6c196679ecb28f16f28c8fe1d62bf9f82e1) - **mysql**: convert full outer join to union with left/right outer joins *(PR [#2461](https://github.com/tobymao/sqlglot/pull/2461) by [@GeorgeSittas](https://github.com/GeorgeSittas))*
+  - :arrow_lower_right: *addresses issue [#2458](undefined) opened by [@treysp](https://github.com/treysp)*
+- [`b3990bc`](https://github.com/tobymao/sqlglot/commit/b3990bc74131ff537303eb24608d40f7456a9ee9) - **postgres**: support WITH ORDINALITY in table functions  *(PR [#2465](https://github.com/tobymao/sqlglot/pull/2465) by [@GeorgeSittas](https://github.com/GeorgeSittas))*
+  - :arrow_lower_right: *addresses issue [#1619](undefined) opened by [@deschman](https://github.com/deschman)*
+- [`c3852db`](https://github.com/tobymao/sqlglot/commit/c3852db1f873b2ed4096d582aa334723512a545d) - **postgres**: add support for the PARTITION OF property in CREATE *(PR [#2476](https://github.com/tobymao/sqlglot/pull/2476) by [@GeorgeSittas](https://github.com/GeorgeSittas))*
+  - :arrow_lower_right: *addresses issue [#2469](undefined) opened by [@judahrand](https://github.com/judahrand)*
+
+### :bug: Bug Fixes
+- [`4f9cb22`](https://github.com/tobymao/sqlglot/commit/4f9cb2297119fd61dc4ab88b76c4db5c46e4ece6) - facilitate transpilation of Redshift's LISTAGG *(PR [#2460](https://github.com/tobymao/sqlglot/pull/2460) by [@GeorgeSittas](https://github.com/GeorgeSittas))*
+- [`81ab80a`](https://github.com/tobymao/sqlglot/commit/81ab80a745531fa345e7ea45a356334c68a908a0) - **mysql**: str_to_date for datetime *(PR [#2473](https://github.com/tobymao/sqlglot/pull/2473) by [@barakalon](https://github.com/barakalon))*
+- [`a1252d8`](https://github.com/tobymao/sqlglot/commit/a1252d8ba7d2394bbb14ccd42d835da8cd4eb740) - **teradata**: add eq, minus abbreviations fixes [#2474](https://github.com/tobymao/sqlglot/pull/2474) *(commit by [@GeorgeSittas](https://github.com/GeorgeSittas))*
+- [`e6f31d6`](https://github.com/tobymao/sqlglot/commit/e6f31d65825d6e3324b4564d202e610d3068e263) - **snowflake**: don't add time format in TO_TIMESTAMP if not supplied *(PR [#2475](https://github.com/tobymao/sqlglot/pull/2475) by [@GeorgeSittas](https://github.com/GeorgeSittas))*
+- [`2307910`](https://github.com/tobymao/sqlglot/commit/23079105af1bdcbd849d813b402ee1a3b55fdacd) - **optimizer**: make normalize_identifiers identifier conversion more lenient *(PR [#2478](https://github.com/tobymao/sqlglot/pull/2478) by [@GeorgeSittas](https://github.com/GeorgeSittas))*
+- [`ed5c559`](https://github.com/tobymao/sqlglot/commit/ed5c5593a6316da81695b1bfaad90b465acb99ba) - **snowflake**: avoid crash on OBJECT_CONSTRUCT without arguments *(PR [#2482](https://github.com/tobymao/sqlglot/pull/2482) by [@GeorgeSittas](https://github.com/GeorgeSittas))*
+  - :arrow_lower_right: *fixes issue [#2479](undefined) opened by [@wedotech-ashley](https://github.com/wedotech-ashley)*
+- [`df0a698`](https://github.com/tobymao/sqlglot/commit/df0a69842daf3ec957effba206b79e27a97c91b4) - **tsql**: add 'dddd' to '%A' time mapping *(PR [#2483](https://github.com/tobymao/sqlglot/pull/2483) by [@GeorgeSittas](https://github.com/GeorgeSittas))*
+  - :arrow_lower_right: *fixes issue [#2481](undefined) opened by [@SudarshanVS](https://github.com/SudarshanVS)*
+
+### :recycle: Refactors
+- [`7a6da28`](https://github.com/tobymao/sqlglot/commit/7a6da28907ef519b954bc813fe180c306fe5006b) - generator now always copies, making transforms much simpler *(PR [#2477](https://github.com/tobymao/sqlglot/pull/2477) by [@tobymao](https://github.com/tobymao))*
+
+
 ## [v18.17.0] - 2023-10-25
 ### :boom: BREAKING CHANGES
 - due to [`c8e87b6`](https://github.com/tobymao/sqlglot/commit/c8e87b6cab18924b6fa307252f19e83eef4f2f03) - unnabreviate units, e.g. ms to millisecond *(PR [#2451](https://github.com/tobymao/sqlglot/pull/2451) by [@GeorgeSittas](https://github.com/GeorgeSittas))*:
@@ -1813,3 +1881,7 @@ Changelog
 [v18.16.0]: https://github.com/tobymao/sqlglot/compare/v18.15.1...v18.16.0
 [v18.16.1]: https://github.com/tobymao/sqlglot/compare/v18.16.0...v18.16.1
 [v18.17.0]: https://github.com/tobymao/sqlglot/compare/v18.16.1...v18.17.0
+[v19.0.0]: https://github.com/tobymao/sqlglot/compare/v18.17.0...v19.0.0
+[v19.0.1]: https://github.com/tobymao/sqlglot/compare/v19.0.0...v19.0.1
+[v19.0.2]: https://github.com/tobymao/sqlglot/compare/v19.0.1...v19.0.2
+[v19.0.3]: https://github.com/tobymao/sqlglot/compare/v19.0.2...v19.0.3

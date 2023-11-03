@@ -13,6 +13,7 @@ class TestSnowflake(Validator):
         expr.selects[0].assert_is(exp.AggFunc)
         self.assertEqual(expr.sql(dialect="snowflake"), "SELECT APPROX_TOP_K(C4, 3, 5) FROM t")
 
+        self.validate_identity("SELECT OBJECT_CONSTRUCT()")
         self.validate_identity("SELECT DAYOFMONTH(CURRENT_TIMESTAMP())")
         self.validate_identity("SELECT DAYOFYEAR(CURRENT_TIMESTAMP())")
         self.validate_identity("LISTAGG(data['some_field'], ',')")
@@ -224,6 +225,7 @@ class TestSnowflake(Validator):
                 "spark": "POWER(x, 2)",
                 "sqlite": "POWER(x, 2)",
                 "starrocks": "POWER(x, 2)",
+                "teradata": "x ** 2",
                 "trino": "POWER(x, 2)",
                 "tsql": "POWER(x, 2)",
             },

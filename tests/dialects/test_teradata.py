@@ -147,6 +147,9 @@ class TestTeradata(Validator):
     def test_mod(self):
         self.validate_all("a MOD b", write={"teradata": "a MOD b", "mysql": "a % b"})
 
+    def test_power(self):
+        self.validate_all("a ** b", write={"teradata": "a ** b", "mysql": "POWER(a, b)"})
+
     def test_abbrev(self):
         self.validate_identity("a LT b", "a < b")
         self.validate_identity("a LE b", "a <= b")
@@ -161,6 +164,8 @@ class TestTeradata(Validator):
             "SELECT col1, col2 FROM dbc.table1 WHERE col1 EQ 'value1' MINUS SELECT col1, col2 FROM dbc.table2",
             "SELECT col1, col2 FROM dbc.table1 WHERE col1 = 'value1' EXCEPT SELECT col1, col2 FROM dbc.table2",
         )
+        self.validate_identity("UPD a SET b = 1", "UPDATE a SET b = 1")
+        self.validate_identity("DEL FROM a", "DELETE FROM a")
 
     def test_datatype(self):
         self.validate_all(
@@ -186,5 +191,17 @@ class TestTeradata(Validator):
                 "mysql": "STR_TO_DATE('1992-01', '%Y-%d')",
                 "spark": "TO_DATE('1992-01', 'yyyy-dd')",
                 "": "STR_TO_DATE('1992-01', '%Y-%d')",
+            },
+        )
+        self.validate_identity("CAST('1992-01' AS FORMAT 'YYYY-DD')")
+
+        self.validate_all(
+            "TRYCAST('-2.5' AS DECIMAL(5, 2))",
+            read={
+                "snowflake": "TRY_CAST('-2.5' AS DECIMAL(5, 2))",
+            },
+            write={
+                "snowflake": "TRY_CAST('-2.5' AS DECIMAL(5, 2))",
+                "teradata": "TRYCAST('-2.5' AS DECIMAL(5, 2))",
             },
         )

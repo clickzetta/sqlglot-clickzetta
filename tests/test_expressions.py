@@ -443,7 +443,7 @@ class TestExpressions(unittest.TestCase):
                 return None
             return node
 
-        self.assertEqual(expression.transform(remove_non_list_arg).sql(), "CAST(x AS )")
+        self.assertEqual(expression.transform(remove_non_list_arg).sql(), "CAST(x AS)")
 
         expression = parse_one("SELECT a, b FROM x")
 

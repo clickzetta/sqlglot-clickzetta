@@ -850,6 +850,8 @@ Default: True</li>
                 <dd id="Trino.Generator.TABLESAMPLE_REQUIRES_PARENS" class="variable"><a href="../generator.html#Generator.TABLESAMPLE_REQUIRES_PARENS">TABLESAMPLE_REQUIRES_PARENS</a></dd>
                 <dd id="Trino.Generator.COLLATE_IS_FUNC" class="variable"><a href="../generator.html#Generator.COLLATE_IS_FUNC">COLLATE_IS_FUNC</a></dd>
                 <dd id="Trino.Generator.DATA_TYPE_SPECIFIERS_ALLOWED" class="variable"><a href="../generator.html#Generator.DATA_TYPE_SPECIFIERS_ALLOWED">DATA_TYPE_SPECIFIERS_ALLOWED</a></dd>
+                <dd id="Trino.Generator.SUPPORTS_NESTED_CTES" class="variable"><a href="../generator.html#Generator.SUPPORTS_NESTED_CTES">SUPPORTS_NESTED_CTES</a></dd>
+                <dd id="Trino.Generator.CTE_RECURSIVE_KEYWORD_REQUIRED" class="variable"><a href="../generator.html#Generator.CTE_RECURSIVE_KEYWORD_REQUIRED">CTE_RECURSIVE_KEYWORD_REQUIRED</a></dd>
                 <dd id="Trino.Generator.STAR_MAPPING" class="variable"><a href="../generator.html#Generator.STAR_MAPPING">STAR_MAPPING</a></dd>
                 <dd id="Trino.Generator.TIME_PART_SINGULARS" class="variable"><a href="../generator.html#Generator.TIME_PART_SINGULARS">TIME_PART_SINGULARS</a></dd>
                 <dd id="Trino.Generator.TOKEN_MAPPING" class="variable"><a href="../generator.html#Generator.TOKEN_MAPPING">TOKEN_MAPPING</a></dd>
@@ -896,6 +898,8 @@ Default: True</li>
                 <dd id="Trino.Generator.autoincrementcolumnconstraint_sql" class="function"><a href="../generator.html#Generator.autoincrementcolumnconstraint_sql">autoincrementcolumnconstraint_sql</a></dd>
                 <dd id="Trino.Generator.compresscolumnconstraint_sql" class="function"><a href="../generator.html#Generator.compresscolumnconstraint_sql">compresscolumnconstraint_sql</a></dd>
                 <dd id="Trino.Generator.generatedasidentitycolumnconstraint_sql" class="function"><a href="../generator.html#Generator.generatedasidentitycolumnconstraint_sql">generatedasidentitycolumnconstraint_sql</a></dd>
+                <dd id="Trino.Generator.generatedasrowcolumnconstraint_sql" class="function"><a href="../generator.html#Generator.generatedasrowcolumnconstraint_sql">generatedasrowcolumnconstraint_sql</a></dd>
+                <dd id="Trino.Generator.periodforsystemtimeconstraint_sql" class="function"><a href="../generator.html#Generator.periodforsystemtimeconstraint_sql">periodforsystemtimeconstraint_sql</a></dd>
                 <dd id="Trino.Generator.notnullcolumnconstraint_sql" class="function"><a href="../generator.html#Generator.notnullcolumnconstraint_sql">notnullcolumnconstraint_sql</a></dd>
                 <dd id="Trino.Generator.primarykeycolumnconstraint_sql" class="function"><a href="../generator.html#Generator.primarykeycolumnconstraint_sql">primarykeycolumnconstraint_sql</a></dd>
                 <dd id="Trino.Generator.uniquecolumnconstraint_sql" class="function"><a href="../generator.html#Generator.uniquecolumnconstraint_sql">uniquecolumnconstraint_sql</a></dd>
@@ -941,8 +945,11 @@ Default: True</li>
                 <dd id="Trino.Generator.datablocksizeproperty_sql" class="function"><a href="../generator.html#Generator.datablocksizeproperty_sql">datablocksizeproperty_sql</a></dd>
                 <dd id="Trino.Generator.blockcompressionproperty_sql" class="function"><a href="../generator.html#Generator.blockcompressionproperty_sql">blockcompressionproperty_sql</a></dd>
                 <dd id="Trino.Generator.isolatedloadingproperty_sql" class="function"><a href="../generator.html#Generator.isolatedloadingproperty_sql">isolatedloadingproperty_sql</a></dd>
+                <dd id="Trino.Generator.partitionboundspec_sql" class="function"><a href="../generator.html#Generator.partitionboundspec_sql">partitionboundspec_sql</a></dd>
+                <dd id="Trino.Generator.partitionedofproperty_sql" class="function"><a href="../generator.html#Generator.partitionedofproperty_sql">partitionedofproperty_sql</a></dd>
                 <dd id="Trino.Generator.lockingproperty_sql" class="function"><a href="../generator.html#Generator.lockingproperty_sql">lockingproperty_sql</a></dd>
                 <dd id="Trino.Generator.withdataproperty_sql" class="function"><a href="../generator.html#Generator.withdataproperty_sql">withdataproperty_sql</a></dd>
+                <dd id="Trino.Generator.withsystemversioningproperty_sql" class="function"><a href="../generator.html#Generator.withsystemversioningproperty_sql">withsystemversioningproperty_sql</a></dd>
                 <dd id="Trino.Generator.insert_sql" class="function"><a href="../generator.html#Generator.insert_sql">insert_sql</a></dd>
                 <dd id="Trino.Generator.intersect_sql" class="function"><a href="../generator.html#Generator.intersect_sql">intersect_sql</a></dd>
                 <dd id="Trino.Generator.intersect_op" class="function"><a href="../generator.html#Generator.intersect_op">intersect_op</a></dd>
@@ -1069,6 +1076,7 @@ Default: True</li>
                 <dd id="Trino.Generator.altercolumn_sql" class="function"><a href="../generator.html#Generator.altercolumn_sql">altercolumn_sql</a></dd>
                 <dd id="Trino.Generator.renametable_sql" class="function"><a href="../generator.html#Generator.renametable_sql">renametable_sql</a></dd>
                 <dd id="Trino.Generator.altertable_sql" class="function"><a href="../generator.html#Generator.altertable_sql">altertable_sql</a></dd>
+                <dd id="Trino.Generator.add_column_sql" class="function"><a href="../generator.html#Generator.add_column_sql">add_column_sql</a></dd>
                 <dd id="Trino.Generator.droppartition_sql" class="function"><a href="../generator.html#Generator.droppartition_sql">droppartition_sql</a></dd>
                 <dd id="Trino.Generator.addconstraint_sql" class="function"><a href="../generator.html#Generator.addconstraint_sql">addconstraint_sql</a></dd>
                 <dd id="Trino.Generator.distinct_sql" class="function"><a href="../generator.html#Generator.distinct_sql">distinct_sql</a></dd>
