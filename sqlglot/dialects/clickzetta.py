@@ -66,12 +66,18 @@ class ClickZetta(Spark):
             exp.DataType.Type.ENUM: "STRING",
             exp.DataType.Type.ENUM16: "STRING",
             exp.DataType.Type.ENUM8: "STRING",
+            # mysql unsigned types
             exp.DataType.Type.UINT: "INT",
             exp.DataType.Type.UTINYINT: "TINYINT",
             exp.DataType.Type.USMALLINT: "SMALLINT",
             exp.DataType.Type.UMEDIUMINT: "INT",
             exp.DataType.Type.UBIGINT: "BIGINT",
             exp.DataType.Type.UDECIMAL: "DECIMAL",
+            # postgres serial types
+            exp.DataType.Type.BIGSERIAL: "BIGINT",
+            exp.DataType.Type.SERIAL: "INT",
+            exp.DataType.Type.SMALLSERIAL: "SMALLINT",
+
         }
 
         TRANSFORMS = {
