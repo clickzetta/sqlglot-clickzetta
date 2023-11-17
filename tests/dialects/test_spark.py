@@ -8,6 +8,7 @@ class TestSpark(Validator):
     dialect = "spark"
 
     def test_ddl(self):
+        self.validate_identity("CREATE TABLE foo AS WITH t AS (SELECT 1 AS col) SELECT col FROM t")
         self.validate_identity("CREATE TEMPORARY VIEW test AS SELECT 1")
         self.validate_identity("CREATE TABLE foo (col VARCHAR(50))")
         self.validate_identity("CREATE TABLE foo (col STRUCT<struct_col_a: VARCHAR((50))>)")
@@ -230,11 +231,18 @@ TBLPROPERTIES (
         self.assertIsInstance(expr.args.get("ignore_nulls"), exp.Boolean)
         self.assertEqual(expr.sql(dialect="spark"), "ANY_VALUE(col, TRUE)")
 
+        self.assertEqual(
+            parse_one("REFRESH TABLE t", read="spark").assert_is(exp.Refresh).sql(dialect="spark"),
+            "REFRESH TABLE t",
+        )
+
+        self.validate_identity("REFRESH 'hdfs://path/to/table'")
+        self.validate_identity("REFRESH TABLE tempDB.view1")
         self.validate_identity("SELECT CASE WHEN a = NULL THEN 1 ELSE 2 END")
         self.validate_identity("SELECT * FROM t1 SEMI JOIN t2 ON t1.x = t2.x")
         self.validate_identity("SELECT TRANSFORM(ARRAY(1, 2, 3), x -> x + 1)")
         self.validate_identity("SELECT TRANSFORM(ARRAY(1, 2, 3), (x, i) -> x + i)")
-        self.validate_identity("REFRESH table a.b.c")
+        self.validate_identity("REFRESH TABLE a.b.c")
         self.validate_identity("INTERVAL -86 days")
         self.validate_identity("SELECT UNIX_TIMESTAMP()")
         self.validate_identity("TRIM('    SparkSQL   ')")
@@ -592,9 +600,9 @@ TBLPROPERTIES (
         self.validate_all(
             "INSERT OVERWRITE TABLE table WITH cte AS (SELECT cola FROM other_table) SELECT cola FROM cte",
             write={
-                "databricks": "INSERT OVERWRITE TABLE table WITH cte AS (SELECT cola FROM other_table) SELECT cola FROM cte",
+                "databricks": "WITH cte AS (SELECT cola FROM other_table) INSERT OVERWRITE TABLE table SELECT cola FROM cte",
                 "hive": "WITH cte AS (SELECT cola FROM other_table) INSERT OVERWRITE TABLE table SELECT cola FROM cte",
-                "spark": "INSERT OVERWRITE TABLE table WITH cte AS (SELECT cola FROM other_table) SELECT cola FROM cte",
+                "spark": "WITH cte AS (SELECT cola FROM other_table) INSERT OVERWRITE TABLE table SELECT cola FROM cte",
                 "spark2": "WITH cte AS (SELECT cola FROM other_table) INSERT OVERWRITE TABLE table SELECT cola FROM cte",
             },
         )

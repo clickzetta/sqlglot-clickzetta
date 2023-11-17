@@ -13,6 +13,7 @@ class TestSnowflake(Validator):
         expr.selects[0].assert_is(exp.AggFunc)
         self.assertEqual(expr.sql(dialect="snowflake"), "SELECT APPROX_TOP_K(C4, 3, 5) FROM t")
 
+        self.validate_identity("SELECT ARRAY_UNIQUE_AGG(x)")
         self.validate_identity("SELECT OBJECT_CONSTRUCT()")
         self.validate_identity("SELECT DAYOFMONTH(CURRENT_TIMESTAMP())")
         self.validate_identity("SELECT DAYOFYEAR(CURRENT_TIMESTAMP())")
@@ -46,6 +47,10 @@ class TestSnowflake(Validator):
         self.validate_identity("ALTER TABLE a SWAP WITH b")
         self.validate_identity(
             'DESCRIBE TABLE "SNOWFLAKE_SAMPLE_DATA"."TPCDS_SF100TCL"."WEB_SITE" type=stage'
+        )
+        self.validate_identity(
+            "CREATE TABLE foo (ID INT COMMENT $$some comment$$)",
+            "CREATE TABLE foo (ID INT COMMENT 'some comment')",
         )
         self.validate_identity(
             "SELECT state, city, SUM(retail_price * quantity) AS gross_revenue FROM sales GROUP BY ALL"
@@ -87,6 +92,14 @@ class TestSnowflake(Validator):
         self.validate_all("CAST(x AS CHAR VARYING)", write={"snowflake": "CAST(x AS VARCHAR)"})
         self.validate_all("CAST(x AS CHARACTER VARYING)", write={"snowflake": "CAST(x AS VARCHAR)"})
         self.validate_all("CAST(x AS NCHAR VARYING)", write={"snowflake": "CAST(x AS VARCHAR)"})
+        self.validate_all(
+            "SELECT { 'Manitoba': 'Winnipeg', 'foo': 'bar' } AS province_capital",
+            write={
+                "duckdb": "SELECT {'Manitoba': 'Winnipeg', 'foo': 'bar'} AS province_capital",
+                "snowflake": "SELECT OBJECT_CONSTRUCT('Manitoba', 'Winnipeg', 'foo', 'bar') AS province_capital",
+                "spark": "SELECT STRUCT('Manitoba' AS Winnipeg, 'foo' AS bar) AS province_capital",
+            },
+        )
         self.validate_all(
             "SELECT COLLATE('B', 'und:ci')",
             write={
@@ -242,8 +255,8 @@ class TestSnowflake(Validator):
             "DIV0(foo, bar)",
             write={
                 "snowflake": "IFF(bar = 0, 0, foo / bar)",
-                "sqlite": "CASE WHEN bar = 0 THEN 0 ELSE foo / bar END",
-                "presto": "IF(bar = 0, 0, foo / bar)",
+                "sqlite": "CASE WHEN bar = 0 THEN 0 ELSE CAST(foo AS REAL) / bar END",
+                "presto": "IF(bar = 0, 0, CAST(foo AS DOUBLE) / bar)",
                 "spark": "IF(bar = 0, 0, foo / bar)",
                 "hive": "IF(bar = 0, 0, foo / bar)",
                 "duckdb": "CASE WHEN bar = 0 THEN 0 ELSE foo / bar END",
@@ -552,6 +565,7 @@ class TestSnowflake(Validator):
             staged_file.sql(dialect="snowflake"),
         )
 
+        self.validate_identity("SELECT metadata$filename FROM @s1/")
         self.validate_identity("SELECT * FROM @~")
         self.validate_identity("SELECT * FROM @~/some/path/to/file.csv")
         self.validate_identity("SELECT * FROM @mystage")
@@ -609,6 +623,13 @@ class TestSnowflake(Validator):
             "SELECT * FROM testtable SAMPLE BLOCK (0.012) REPEATABLE (99992)",
             write={
                 "snowflake": "SELECT * FROM testtable SAMPLE BLOCK (0.012) SEED (99992)",
+            },
+        )
+        self.validate_all(
+            "SELECT * FROM (SELECT * FROM t1 join t2 on t1.a = t2.c) SAMPLE (1)",
+            write={
+                "snowflake": "SELECT * FROM (SELECT * FROM t1 JOIN t2 ON t1.a = t2.c) SAMPLE (1)",
+                "spark": "SELECT * FROM (SELECT * FROM t1 JOIN t2 ON t1.a = t2.c) SAMPLE (1 PERCENT)",
             },
         )
 
@@ -1180,3 +1201,39 @@ MATCH_RECOGNIZE (
         ast = parse_one("ALTER TABLE a SWAP WITH b", read="snowflake")
         assert isinstance(ast, exp.AlterTable)
         assert isinstance(ast.args["actions"][0], exp.SwapTable)
+
+    def test_try_cast(self):
+        self.validate_identity("SELECT TRY_CAST(x AS DOUBLE)")
+
+        self.validate_all("TRY_CAST('foo' AS TEXT)", read={"hive": "CAST('foo' AS STRING)"})
+        self.validate_all("CAST(5 + 5 AS TEXT)", read={"hive": "CAST(5 + 5 AS STRING)"})
+        self.validate_all(
+            "CAST(TRY_CAST('2020-01-01' AS DATE) AS TEXT)",
+            read={
+                "hive": "CAST(CAST('2020-01-01' AS DATE) AS STRING)",
+                "snowflake": "CAST(TRY_CAST('2020-01-01' AS DATE) AS TEXT)",
+            },
+        )
+        self.validate_all(
+            "TRY_CAST(x AS TEXT)",
+            read={
+                "hive": "CAST(x AS STRING)",
+                "snowflake": "TRY_CAST(x AS TEXT)",
+            },
+        )
+
+        from sqlglot.optimizer.annotate_types import annotate_types
+
+        expression = parse_one("SELECT CAST(t.x AS STRING) FROM t", read="hive")
+
+        expression = annotate_types(expression, schema={"t": {"x": "string"}})
+        self.assertEqual(expression.sql(dialect="snowflake"), "SELECT TRY_CAST(t.x AS TEXT) FROM t")
+
+        expression = annotate_types(expression, schema={"t": {"x": "int"}})
+        self.assertEqual(expression.sql(dialect="snowflake"), "SELECT CAST(t.x AS TEXT) FROM t")
+
+        # We can't infer FOO's type since it's a UDF in this case, so we don't get rid of TRY_CAST
+        expression = parse_one("SELECT TRY_CAST(FOO() AS TEXT)", read="snowflake")
+
+        expression = annotate_types(expression)
+        self.assertEqual(expression.sql(dialect="snowflake"), "SELECT TRY_CAST(FOO() AS TEXT)")

@@ -34,6 +34,7 @@ class TokenType(AutoName):
     EQ = auto()
     NEQ = auto()
     NULLSAFE_EQ = auto()
+    COLON_EQ = auto()
     AND = auto()
     OR = auto()
     AMP = auto()
@@ -296,6 +297,7 @@ class TokenType(AutoName):
     QUOTE = auto()
     RANGE = auto()
     RECURSIVE = auto()
+    REFRESH = auto()
     REPLACE = auto()
     RETURNING = auto()
     REFERENCES = auto()
@@ -372,7 +374,7 @@ class Token:
         col: int = 1,
         start: int = 0,
         end: int = 0,
-        comments: t.List[str] = [],
+        comments: t.Optional[t.List[str]] = None,
     ) -> None:
         """Token initializer.
 
@@ -391,7 +393,7 @@ class Token:
         self.col = col
         self.start = start
         self.end = end
-        self.comments = comments
+        self.comments = [] if comments is None else comments
 
     def __repr__(self) -> str:
         attributes = ", ".join(f"{k}: {getattr(self, k)}" for k in self.__slots__)
@@ -690,17 +692,22 @@ class Tokenizer(metaclass=_Tokenizer):
         "BOOLEAN": TokenType.BOOLEAN,
         "BYTE": TokenType.TINYINT,
         "MEDIUMINT": TokenType.MEDIUMINT,
+        "INT1": TokenType.TINYINT,
         "TINYINT": TokenType.TINYINT,
+        "INT16": TokenType.SMALLINT,
         "SHORT": TokenType.SMALLINT,
         "SMALLINT": TokenType.SMALLINT,
         "INT128": TokenType.INT128,
+        "HUGEINT": TokenType.INT128,
         "INT2": TokenType.SMALLINT,
         "INTEGER": TokenType.INT,
         "INT": TokenType.INT,
         "INT4": TokenType.INT,
+        "INT32": TokenType.INT,
+        "INT64": TokenType.BIGINT,
         "LONG": TokenType.BIGINT,
         "BIGINT": TokenType.BIGINT,
-        "INT8": TokenType.BIGINT,
+        "INT8": TokenType.TINYINT,
         "DEC": TokenType.DECIMAL,
         "DECIMAL": TokenType.DECIMAL,
         "BIGDECIMAL": TokenType.BIGDECIMAL,
@@ -851,13 +858,26 @@ class Tokenizer(metaclass=_Tokenizer):
 
     def _scan(self, until: t.Optional[t.Callable] = None) -> None:
         while self.size and not self._end:
-            self._start = self._current
-            self._advance()
+            current = self._current
+
+            # skip spaces inline rather than iteratively call advance()
+            # for performance reasons
+            while current < self.size:
+                char = self.sql[current]
+
+                if char.isspace() and (char == " " or char == "\t"):
+                    current += 1
+                else:
+                    break
+
+            n = current - self._current
+            self._start = current
+            self._advance(n if n > 1 else 1)
 
             if self._char is None:
                 break
 
-            if self._char not in self.WHITE_SPACE:
+            if not self._char.isspace():
                 if self._char.isdigit():
                     self._scan_number()
                 elif self._char in self._IDENTIFIERS:
@@ -983,7 +1003,7 @@ class Tokenizer(metaclass=_Tokenizer):
             if end < self.size:
                 char = self.sql[end]
                 single_token = single_token or char in self.SINGLE_TOKENS
-                is_space = char in self.WHITE_SPACE
+                is_space = char.isspace()
 
                 if not is_space or not prev_space:
                     if is_space:

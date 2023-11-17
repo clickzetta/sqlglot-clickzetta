@@ -248,6 +248,7 @@ class Parser(metaclass=_Parser):
 
     CREATABLES = {
         TokenType.COLUMN,
+        TokenType.CONSTRAINT,
         TokenType.FUNCTION,
         TokenType.INDEX,
         TokenType.PROCEDURE,
@@ -302,7 +303,9 @@ class Parser(metaclass=_Parser):
         TokenType.PIVOT,
         TokenType.PRAGMA,
         TokenType.RANGE,
+        TokenType.RECURSIVE,
         TokenType.REFERENCES,
+        TokenType.REFRESH,
         TokenType.RIGHT,
         TokenType.ROW,
         TokenType.ROWS,
@@ -393,6 +396,7 @@ class Parser(metaclass=_Parser):
     }
 
     EQUALITY = {
+        TokenType.COLON_EQ: exp.PropertyEQ,
         TokenType.EQ: exp.EQ,
         TokenType.NEQ: exp.NEQ,
         TokenType.NULLSAFE_EQ: exp.NullSafeEQ,
@@ -563,6 +567,7 @@ class Parser(metaclass=_Parser):
         TokenType.MERGE: lambda self: self._parse_merge(),
         TokenType.PIVOT: lambda self: self._parse_simplified_pivot(),
         TokenType.PRAGMA: lambda self: self.expression(exp.Pragma, this=self._parse_expression()),
+        TokenType.REFRESH: lambda self: self._parse_refresh(),
         TokenType.ROLLBACK: lambda self: self._parse_commit_or_rollback(),
         TokenType.SET: lambda self: self._parse_set(),
         TokenType.UNCACHE: lambda self: self._parse_uncache(),
@@ -924,6 +929,15 @@ class Parser(metaclass=_Parser):
 
     # Whether the TRIM function expects the characters to trim as its first argument
     TRIM_PATTERN_FIRST = False
+
+    # Whether the behavior of a / b depends on the types of a and b.
+    # False means a / b is always float division.
+    # True means a / b is integer division if both a and b are integers.
+    TYPED_DIVISION = False
+
+    # False means 1 / 0 throws an error.
+    # True means 1 / 0 returns null.
+    SAFE_DIVISION = False
 
     __slots__ = (
         "error_level",
@@ -1392,7 +1406,7 @@ class Parser(metaclass=_Parser):
             if self._match_texts(self.CLONE_KEYWORDS):
                 copy = self._prev.text.lower() == "copy"
                 clone = self._parse_table(schema=True)
-                when = self._match_texts({"AT", "BEFORE"}) and self._prev.text.upper()
+                when = self._match_texts(("AT", "BEFORE")) and self._prev.text.upper()
                 clone_kind = (
                     self._match(TokenType.L_PAREN)
                     and self._match_texts(self.CLONE_KINDS)
@@ -2653,7 +2667,7 @@ class Parser(metaclass=_Parser):
             while self._match_set(self.TABLE_INDEX_HINT_TOKENS):
                 hint = exp.IndexTableHint(this=self._prev.text.upper())
 
-                self._match_texts({"INDEX", "KEY"})
+                self._match_texts(("INDEX", "KEY"))
                 if self._match(TokenType.FOR):
                     hint.set("target", self._advance_any() and self._prev.text.upper())
 
@@ -2799,7 +2813,7 @@ class Parser(metaclass=_Parser):
         if not self._match(TokenType.UNNEST):
             return None
 
-        expressions = self._parse_wrapped_csv(self._parse_type)
+        expressions = self._parse_wrapped_csv(self._parse_equality)
         offset = self._match_pair(TokenType.WITH, TokenType.ORDINALITY)
 
         alias = self._parse_table_alias() if with_alias else None
@@ -3147,7 +3161,7 @@ class Parser(metaclass=_Parser):
             comments = self._prev_comments
             if top:
                 limit_paren = self._match(TokenType.L_PAREN)
-                expression = self._parse_number()
+                expression = self._parse_term() if limit_paren else self._parse_number()
 
                 if limit_paren:
                     self._match_r_paren()
@@ -3400,8 +3414,13 @@ class Parser(metaclass=_Parser):
 
     def _parse_factor(self) -> t.Optional[exp.Expression]:
         if self.EXPONENT:
-            return self._parse_tokens(self._parse_exponent, self.FACTOR)
-        return self._parse_tokens(self._parse_unary, self.FACTOR)
+            factor = self._parse_tokens(self._parse_exponent, self.FACTOR)
+        else:
+            factor = self._parse_tokens(self._parse_unary, self.FACTOR)
+        if isinstance(factor, exp.Div):
+            factor.args["typed"] = self.TYPED_DIVISION
+            factor.args["safe"] = self.SAFE_DIVISION
+        return factor
 
     def _parse_exponent(self) -> t.Optional[exp.Expression]:
         return self._parse_tokens(self._parse_unary, self.EXPONENT)
@@ -4844,8 +4863,8 @@ class Parser(metaclass=_Parser):
         return None
 
     def _parse_string(self) -> t.Optional[exp.Expression]:
-        if self._match(TokenType.STRING):
-            return self.PRIMARY_PARSERS[TokenType.STRING](self, self._prev)
+        if self._match_set((TokenType.STRING, TokenType.RAW_STRING)):
+            return self.PRIMARY_PARSERS[self._prev.token_type](self, self._prev)
         return self._parse_placeholder()
 
     def _parse_string_as_identifier(self) -> t.Optional[exp.Identifier]:
@@ -5003,7 +5022,7 @@ class Parser(metaclass=_Parser):
         if self._match_texts(self.TRANSACTION_KIND):
             this = self._prev.text
 
-        self._match_texts({"TRANSACTION", "WORK"})
+        self._match_texts(("TRANSACTION", "WORK"))
 
         modes = []
         while True:
@@ -5023,7 +5042,7 @@ class Parser(metaclass=_Parser):
         savepoint = None
         is_rollback = self._prev.token_type == TokenType.ROLLBACK
 
-        self._match_texts({"TRANSACTION", "WORK"})
+        self._match_texts(("TRANSACTION", "WORK"))
 
         if self._match_text_seq("TO"):
             self._match_text_seq("SAVEPOINT")
@@ -5037,6 +5056,10 @@ class Parser(metaclass=_Parser):
             return self.expression(exp.Rollback, savepoint=savepoint)
 
         return self.expression(exp.Commit, chain=chain)
+
+    def _parse_refresh(self) -> exp.Refresh:
+        self._match(TokenType.TABLE)
+        return self.expression(exp.Refresh, this=self._parse_string() or self._parse_table())
 
     def _parse_add_column(self) -> t.Optional[exp.Expression]:
         if not self._match_text_seq("ADD"):
@@ -5249,7 +5272,7 @@ class Parser(metaclass=_Parser):
     ) -> t.Optional[exp.Expression]:
         index = self._index
 
-        if kind in {"GLOBAL", "SESSION"} and self._match_text_seq("TRANSACTION"):
+        if kind in ("GLOBAL", "SESSION") and self._match_text_seq("TRANSACTION"):
             return self._parse_set_transaction(global_=kind == "GLOBAL")
 
         left = self._parse_primary() or self._parse_id_var()

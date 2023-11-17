@@ -202,12 +202,46 @@ def _parse_date_delta(
     return inner_func
 
 
+def qualify_derived_table_outputs(expression: exp.Expression) -> exp.Expression:
+    """Ensures all (unnamed) output columns are aliased for CTEs and Subqueries."""
+    alias = expression.args.get("alias")
+
+    if (
+        isinstance(expression, (exp.CTE, exp.Subquery))
+        and isinstance(alias, exp.TableAlias)
+        and not alias.columns
+    ):
+        from sqlglot.optimizer.qualify_columns import qualify_outputs
+
+        # We keep track of the unaliased column projection indexes instead of the expressions
+        # themselves, because the latter are going to be replaced by new nodes when the aliases
+        # are added and hence we won't be able to reach these newly added Alias parents
+        subqueryable = expression.this
+        unaliased_column_indexes = (
+            i
+            for i, c in enumerate(subqueryable.selects)
+            if isinstance(c, exp.Column) and not c.alias
+        )
+
+        qualify_outputs(subqueryable)
+
+        # Preserve the quoting information of columns for newly added Alias nodes
+        subqueryable_selects = subqueryable.selects
+        for select_index in unaliased_column_indexes:
+            alias = subqueryable_selects[select_index]
+            column = alias.this
+            if isinstance(column.this, exp.Identifier):
+                alias.args["alias"].set("quoted", column.this.quoted)
+
+    return expression
+
+
 class TSQL(Dialect):
     RESOLVES_IDENTIFIERS_AS_UPPERCASE = None
-    NULL_ORDERING = "nulls_are_small"
     TIME_FORMAT = "'yyyy-mm-dd hh:mm:ss'"
     SUPPORTS_SEMI_ANTI_JOIN = False
     LOG_BASE_FIRST = False
+    TYPED_DIVISION = True
 
     TIME_MAPPING = {
         "year": "%Y",
@@ -433,7 +467,7 @@ class TSQL(Dialect):
             """
             rollback = self._prev.token_type == TokenType.ROLLBACK
 
-            self._match_texts({"TRAN", "TRANSACTION"})
+            self._match_texts(("TRAN", "TRANSACTION"))
             this = self._parse_id_var()
 
             if rollback:
@@ -579,12 +613,12 @@ class TSQL(Dialect):
             return super()._parse_if()
 
         def _parse_unique(self) -> exp.UniqueColumnConstraint:
-            return self.expression(
-                exp.UniqueColumnConstraint,
-                this=None
-                if self._curr and self._curr.text.upper() in {"CLUSTERED", "NONCLUSTERED"}
-                else self._parse_schema(self._parse_id_var(any_token=False)),
-            )
+            if self._match_texts(("CLUSTERED", "NONCLUSTERED")):
+                this = self.CONSTRAINT_PARSERS[self._prev.text.upper()](self)
+            else:
+                this = self._parse_schema(self._parse_id_var(any_token=False))
+
+            return self.expression(exp.UniqueColumnConstraint, this=this)
 
     class Generator(generator.Generator):
         LIMIT_IS_TOP = True
@@ -594,8 +628,19 @@ class TSQL(Dialect):
         ALTER_TABLE_ADD_COLUMN_KEYWORD = False
         LIMIT_FETCH = "FETCH"
         COMPUTED_COLUMN_WITH_TYPE = False
-        SUPPORTS_NESTED_CTES = False
         CTE_RECURSIVE_KEYWORD_REQUIRED = False
+        ENSURE_BOOLS = True
+        NULL_ORDERING_SUPPORTED = False
+
+        EXPRESSIONS_WITHOUT_NESTED_CTES = {
+            exp.Delete,
+            exp.Insert,
+            exp.Merge,
+            exp.Select,
+            exp.Subquery,
+            exp.Union,
+            exp.Update,
+        }
 
         TYPE_MAPPING = {
             **generator.Generator.TYPE_MAPPING,
@@ -616,12 +661,14 @@ class TSQL(Dialect):
             exp.AutoIncrementColumnConstraint: lambda *_: "IDENTITY",
             exp.DateAdd: generate_date_delta_with_unit_sql,
             exp.DateDiff: generate_date_delta_with_unit_sql,
+            exp.CTE: transforms.preprocess([qualify_derived_table_outputs]),
             exp.CurrentDate: rename_func("GETDATE"),
             exp.CurrentTimestamp: rename_func("GETDATE"),
             exp.Extract: rename_func("DATEPART"),
             exp.GeneratedAsIdentityColumnConstraint: generatedasidentitycolumnconstraint_sql,
             exp.GroupConcat: _string_agg_sql,
             exp.If: rename_func("IIF"),
+            exp.Length: rename_func("LEN"),
             exp.Max: max_or_greatest,
             exp.MD5: lambda self, e: self.func("HASHBYTES", exp.Literal.string("MD5"), e.this),
             exp.Min: min_or_least,
@@ -633,6 +680,7 @@ class TSQL(Dialect):
                     transforms.eliminate_qualify,
                 ]
             ),
+            exp.Subquery: transforms.preprocess([qualify_derived_table_outputs]),
             exp.SHA: lambda self, e: self.func("HASHBYTES", exp.Literal.string("SHA1"), e.this),
             exp.SHA2: lambda self, e: self.func(
                 "HASHBYTES",
@@ -690,8 +738,21 @@ class TSQL(Dialect):
 
             table = expression.find(exp.Table)
 
+            # Convert CTAS statement to SELECT .. INTO ..
             if kind == "TABLE" and expression.expression:
-                sql = f"SELECT * INTO {self.sql(table)} FROM ({self.sql(expression.expression)}) AS temp"
+                ctas_with = expression.expression.args.get("with")
+                if ctas_with:
+                    ctas_with = ctas_with.pop()
+
+                subquery = expression.expression
+                if isinstance(subquery, exp.Subqueryable):
+                    subquery = subquery.subquery()
+
+                select_into = exp.select("*").from_(exp.alias_(subquery, "temp", table=True))
+                select_into.set("into", exp.Into(this=table))
+                select_into.set("with", ctas_with)
+
+                sql = self.sql(select_into)
 
             if exists:
                 identifier = self.sql(exp.Literal.string(exp.table_name(table) if table else ""))

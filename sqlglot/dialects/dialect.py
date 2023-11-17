@@ -178,6 +178,15 @@ class Dialect(metaclass=_Dialect):
     # Options are: "nulls_are_small", "nulls_are_large", "nulls_are_last"
     NULL_ORDERING = "nulls_are_small"
 
+    # Whether the behavior of a / b depends on the types of a and b.
+    # False means a / b is always float division.
+    # True means a / b is integer division if both a and b are integers.
+    TYPED_DIVISION = False
+
+    # False means 1 / 0 throws an error.
+    # True means 1 / 0 returns null.
+    SAFE_DIVISION = False
+
     DATE_FORMAT = "'%Y-%m-%d'"
     DATEINT_FORMAT = "'%Y%m%d'"
     TIME_FORMAT = "'%Y-%m-%d %H:%M:%S'"

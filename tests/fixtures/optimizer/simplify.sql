@@ -43,6 +43,9 @@ TRUE;
 1.0 = 1;
 TRUE;
 
+CAST('2023-01-01' AS DATE) = CAST('2023-01-01' AS DATE);
+TRUE;
+
 'x' = 'y';
 FALSE;
 
@@ -414,6 +417,9 @@ FALSE;
 1 IS NOT NULL;
 TRUE;
 
+date '1998-12-01' - interval x day;
+CAST('1998-12-01' AS DATE) - INTERVAL x day;
+
 date '1998-12-01' - interval '90' day;
 CAST('1998-09-02' AS DATE);
 
@@ -446,6 +452,24 @@ CAST(x AS DATETIME) + INTERVAL '1' week;
 
 TS_OR_DS_TO_DATE('1998-12-01 00:00:01') - interval '90' day;
 CAST('1998-09-02' AS DATE);
+
+DATE_ADD(CAST('2023-01-02' AS DATE), -2, 'MONTH');
+CAST('2022-11-02' AS DATE);
+
+DATE_SUB(CAST('2023-01-02' AS DATE), 1 + 1, 'DAY');
+CAST('2022-12-31' AS DATE);
+
+DATE_ADD(CAST('2023-01-02' AS DATETIME), -2, 'HOUR');
+CAST('2023-01-01 22:00:00' AS DATETIME);
+
+DATETIME_ADD(CAST('2023-01-02' AS DATETIME), -2, 'HOUR');
+CAST('2023-01-01 22:00:00' AS DATETIME);
+
+DATETIME_SUB(CAST('2023-01-02' AS DATETIME), 1 + 1, 'HOUR');
+CAST('2023-01-01 22:00:00' AS DATETIME);
+
+DATE_ADD(x, 1, 'MONTH');
+DATE_ADD(x, 1, 'MONTH');
 
 --------------------------------------
 -- Comparisons
@@ -663,6 +687,15 @@ ROW() OVER () = 1 OR ROW() OVER () IS NULL;
 a AND b AND COALESCE(ROW() OVER (), 1) = 1;
 a AND b AND (ROW() OVER () = 1 OR ROW() OVER () IS NULL);
 
+COALESCE(1, 2);
+1;
+
+COALESCE(CAST(CAST('2023-01-01' AS TIMESTAMP) AS DATE), x);
+CAST(CAST('2023-01-01' AS TIMESTAMP) AS DATE);
+
+COALESCE(CAST(NULL AS DATE), x);
+COALESCE(CAST(NULL AS DATE), x);
+
 --------------------------------------
 -- CONCAT
 --------------------------------------
@@ -775,6 +808,9 @@ x >= CAST('2022-01-01' AS DATE);
 
 DATE_TRUNC('year', x) > TS_OR_DS_TO_DATE(TS_OR_DS_TO_DATE('2021-01-02'));
 x >= CAST('2022-01-01' AS DATE);
+
+DATE_TRUNC('year', x) > TS_OR_DS_TO_DATE(TS_OR_DS_TO_DATE('2021-01-02', '%Y'));
+DATE_TRUNC('year', x) > TS_OR_DS_TO_DATE(TS_OR_DS_TO_DATE('2021-01-02', '%Y'));
 
 -- right is not a date
 DATE_TRUNC('year', x) <> '2021-01-02';

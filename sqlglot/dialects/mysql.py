@@ -157,6 +157,7 @@ class MySQL(Dialect):
     DPIPE_IS_STRING_CONCAT = False
     SUPPORTS_USER_DEFINED_TYPES = False
     SUPPORTS_SEMI_ANTI_JOIN = False
+    SAFE_DIVISION = True
 
     # https://prestodb.io/docs/current/functions/datetime.html#mysql-date-functions
     TIME_MAPPING = {
@@ -457,7 +458,7 @@ class MySQL(Dialect):
             self, kind: t.Optional[str] = None
         ) -> exp.IndexColumnConstraint:
             if kind:
-                self._match_texts({"INDEX", "KEY"})
+                self._match_texts(("INDEX", "KEY"))
 
             this = self._parse_id_var(any_token=False)
             index_type = self._match(TokenType.USING) and self._advance_any() and self._prev.text
@@ -520,7 +521,7 @@ class MySQL(Dialect):
 
             log = self._parse_string() if self._match_text_seq("IN") else None
 
-            if this in {"BINLOG EVENTS", "RELAYLOG EVENTS"}:
+            if this in ("BINLOG EVENTS", "RELAYLOG EVENTS"):
                 position = self._parse_number() if self._match_text_seq("FROM") else None
                 db = None
             else:
@@ -769,7 +770,7 @@ class MySQL(Dialect):
 
             target = self.sql(expression, "target")
             target = f" {target}" if target else ""
-            if expression.name in {"COLUMNS", "INDEX"}:
+            if expression.name in ("COLUMNS", "INDEX"):
                 target = f" FROM{target}"
             elif expression.name == "GRANTS":
                 target = f" FOR{target}"
@@ -801,6 +802,14 @@ class MySQL(Dialect):
                 mutex_or_status = ""
 
             return f"SHOW{full}{global_}{this}{target}{types}{db}{query}{log}{position}{channel}{mutex_or_status}{like}{where}{offset}{limit}"
+
+        def altercolumn_sql(self, expression: exp.AlterColumn) -> str:
+            dtype = self.sql(expression, "dtype")
+            if not dtype:
+                return super().altercolumn_sql(expression)
+
+            this = self.sql(expression, "this")
+            return f"MODIFY COLUMN {this} {dtype}"
 
         def _prefixed_sql(self, prefix: str, expression: exp.Expression, arg: str) -> str:
             sql = self.sql(expression, arg)

@@ -134,7 +134,7 @@ class Expression(metaclass=_Expression):
         return self.args.get("expression")
 
     @property
-    def expressions(self):
+    def expressions(self) -> t.List[t.Any]:
         """
         Retrieves the argument with key "expressions".
         """
@@ -237,6 +237,9 @@ class Expression(metaclass=_Expression):
         if dtype and not isinstance(dtype, DataType):
             dtype = DataType.build(dtype)
         self._type = dtype  # type: ignore
+
+    def is_type(self, *dtypes) -> bool:
+        return self.type is not None and self.type.is_type(*dtypes)
 
     @property
     def meta(self) -> t.Dict[str, t.Any]:
@@ -821,6 +824,12 @@ class Expression(metaclass=_Expression):
     def rlike(self, other: ExpOrStr) -> RegexpLike:
         return self._binop(RegexpLike, other)
 
+    def div(self, other: ExpOrStr, typed: bool = False, safe: bool = False) -> Div:
+        div = self._binop(Div, other)
+        div.args["typed"] = typed
+        div.args["safe"] = safe
+        return div
+
     def __lt__(self, other: t.Any) -> LT:
         return self._binop(LT, other)
 
@@ -1000,7 +1009,6 @@ class UDTF(DerivedTable, Unionable):
 
 class Cache(Expression):
     arg_types = {
-        "with": False,
         "this": True,
         "lazy": False,
         "options": False,
@@ -1010,6 +1018,10 @@ class Cache(Expression):
 
 class Uncache(Expression):
     arg_types = {"this": True, "exists": False}
+
+
+class Refresh(Expression):
+    pass
 
 
 class DDL(Expression):
@@ -1133,8 +1145,10 @@ class WithinGroup(Expression):
     arg_types = {"this": True, "expression": False}
 
 
+# clickhouse supports scalar ctes
+# https://clickhouse.com/docs/en/sql-reference/statements/select/with
 class CTE(DerivedTable):
-    arg_types = {"this": True, "alias": True}
+    arg_types = {"this": True, "alias": True, "scalar": False}
 
 
 class TableAlias(Expression):
@@ -3676,6 +3690,7 @@ class DataType(Expression):
         Type.BIGINT,
         Type.INT128,
         Type.INT256,
+        Type.BIT,
     }
 
     FLOAT_TYPES = {
@@ -3881,7 +3896,7 @@ class BitwiseXor(Binary):
 
 
 class Div(Binary):
-    pass
+    arg_types = {"this": True, "expression": True, "typed": False, "safe": False}
 
 
 class Overlaps(Binary):
@@ -3923,6 +3938,11 @@ class NullSafeEQ(Binary, Predicate):
 
 
 class NullSafeNEQ(Binary, Predicate):
+    pass
+
+
+# Represents e.g. := in DuckDB which is mostly used for setting parameters
+class PropertyEQ(Binary):
     pass
 
 
@@ -4275,6 +4295,10 @@ class GenerateSeries(Func):
 
 
 class ArrayAgg(AggFunc):
+    pass
+
+
+class ArrayUniqueAgg(AggFunc):
     pass
 
 
@@ -4663,12 +4687,20 @@ class If(Func):
     arg_types = {"this": True, "true": True, "false": False}
 
 
+class Nullif(Func):
+    arg_types = {"this": True, "expression": True}
+
+
 class Initcap(Func):
     arg_types = {"this": True, "expression": False}
 
 
 class IsNan(Func):
     _sql_names = ["IS_NAN", "ISNAN"]
+
+
+class IsInf(Func):
+    _sql_names = ["IS_INF", "ISINF"]
 
 
 class FormatJson(Expression):
@@ -4988,10 +5020,6 @@ class RowNumber(Func):
 
 class SafeDivide(Func):
     arg_types = {"this": True, "expression": True}
-
-
-class SetAgg(AggFunc):
-    pass
 
 
 class SHA(Func):
@@ -6530,6 +6558,27 @@ def func(name: str, *args, dialect: DialectType = None, **kwargs) -> Func:
         raise ValueError(error_message)
 
     return function
+
+
+def case(
+    expression: t.Optional[ExpOrStr] = None,
+    **opts,
+) -> Case:
+    """
+    Initialize a CASE statement.
+
+    Example:
+        case().when("a = 1", "foo").else_("bar")
+
+    Args:
+        expression: Optionally, the input expression (not all dialects support this)
+        **opts: Extra keyword arguments for parsing `expression`
+    """
+    if expression is not None:
+        this = maybe_parse(expression, **opts)
+    else:
+        this = None
+    return Case(this=this, ifs=[])
 
 
 def true() -> Boolean:

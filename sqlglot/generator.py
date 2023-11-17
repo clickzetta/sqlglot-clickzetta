@@ -230,11 +230,20 @@ class Generator:
     # Whether or not data types support additional specifiers like e.g. CHAR or BYTE (oracle)
     DATA_TYPE_SPECIFIERS_ALLOWED = False
 
-    # Whether or not nested CTEs (e.g. defined inside of subqueries) are allowed
-    SUPPORTS_NESTED_CTES = True
+    # Whether or not conditions require booleans WHERE x = 0 vs WHERE x
+    ENSURE_BOOLS = False
 
     # Whether or not the "RECURSIVE" keyword is required when defining recursive CTEs
     CTE_RECURSIVE_KEYWORD_REQUIRED = True
+
+    # Whether the behavior of a / b depends on the types of a and b.
+    # False means a / b is always float division.
+    # True means a / b is integer division if both a and b are integers.
+    TYPED_DIVISION = False
+
+    # False means 1 / 0 throws an error.
+    # True means 1 / 0 returns null.
+    SAFE_DIVISION = False
 
     TYPE_MAPPING = {
         exp.DataType.Type.NCHAR: "CHAR",
@@ -369,6 +378,11 @@ class Generator:
         exp.Paren,
     )
 
+    # Expressions that need to have all CTEs under them bubbled up to them
+    EXPRESSIONS_WITHOUT_NESTED_CTES: t.Set[t.Type[exp.Expression]] = set()
+
+    KEY_VALUE_DEFINITONS = (exp.Bracket, exp.EQ, exp.PropertyEQ, exp.Slice)
+
     SENTINEL_LINE_BREAK = "__SQLGLOT__LB__"
 
     # Autofilled
@@ -470,19 +484,23 @@ class Generator:
         if copy:
             expression = expression.copy()
 
-        # Some dialects only support CTEs at the top level expression, so we need to bubble up nested
-        # CTEs to that level in order to produce a syntactically valid expression. This transformation
-        # happens here to minimize code duplication, since many expressions support CTEs.
+        # Some dialects only support CTEs at the top level expression for certain expression
+        # types, so we need to bubble up nested CTEs to that level in order to produce a
+        # syntactically valid expression. This transformation happens here to minimize code
+        # duplication, since many expressions support CTEs.
         if (
-            not self.SUPPORTS_NESTED_CTES
-            and isinstance(expression, exp.Expression)
-            and not expression.parent
-            and "with" in expression.arg_types
+            not expression.parent
+            and type(expression) in self.EXPRESSIONS_WITHOUT_NESTED_CTES
             and any(node.parent is not expression for node in expression.find_all(exp.With))
         ):
             from sqlglot.transforms import move_ctes_to_top_level
 
             expression = move_ctes_to_top_level(expression)
+
+        if self.ENSURE_BOOLS:
+            from sqlglot.transforms import ensure_bools
+
+            expression = ensure_bools(expression)
 
         self.unsupported_messages = []
         sql = self.sql(expression).strip()
@@ -1454,7 +1472,7 @@ class Generator:
     def tablesample_sql(
         self, expression: exp.TableSample, seed_prefix: str = "SEED", sep=" AS "
     ) -> str:
-        if self.ALIAS_POST_TABLESAMPLE and expression.this.alias:
+        if self.ALIAS_POST_TABLESAMPLE and expression.this and expression.this.alias:
             table = expression.this.copy()
             table.set("alias", None)
             this = self.sql(table)
@@ -1704,12 +1722,16 @@ class Generator:
 
     def limit_sql(self, expression: exp.Limit, top: bool = False) -> str:
         this = self.sql(expression, "this")
-        args = ", ".join(
-            self.sql(self._simplify_unless_literal(e) if self.LIMIT_ONLY_LITERALS else e)
+
+        args = [
+            self._simplify_unless_literal(e) if self.LIMIT_ONLY_LITERALS else e
             for e in (expression.args.get(k) for k in ("offset", "expression"))
             if e
-        )
-        return f"{this}{self.seg('TOP' if top else 'LIMIT')} {args}"
+        ]
+
+        args_sql = ", ".join(self.sql(e) for e in args)
+        args_sql = f"({args_sql})" if any(top and not e.is_number for e in args) else args_sql
+        return f"{this}{self.seg('TOP' if top else 'LIMIT')} {args_sql}"
 
     def offset_sql(self, expression: exp.Offset) -> str:
         this = self.sql(expression, "this")
@@ -1814,6 +1836,8 @@ class Generator:
         nulls_are_small = self.NULL_ORDERING == "nulls_are_small"
         nulls_are_last = self.NULL_ORDERING == "nulls_are_last"
 
+        this = self.sql(expression, "this")
+
         sort_order = " DESC" if desc else (" ASC" if desc is False else "")
         nulls_sort_change = ""
         if nulls_first and (
@@ -1827,13 +1851,13 @@ class Generator:
         ):
             nulls_sort_change = " NULLS LAST"
 
+        # If the NULLS FIRST/LAST clause is unsupported, we add another sort key to simulate it
         if nulls_sort_change and not self.NULL_ORDERING_SUPPORTED:
-            self.unsupported(
-                "Sorting in an ORDER BY on NULLS FIRST/NULLS LAST is not supported by this dialect"
-            )
+            null_sort_order = " DESC" if nulls_sort_change == " NULLS FIRST" else ""
+            this = f"CASE WHEN {this} IS NULL THEN 1 ELSE 0 END{null_sort_order}, {this}"
             nulls_sort_change = ""
 
-        return f"{self.sql(expression, 'this')}{sort_order}{nulls_sort_change}"
+        return f"{this}{sort_order}{nulls_sort_change}"
 
     def matchrecognize_sql(self, expression: exp.MatchRecognize) -> str:
         partition = self.partition_by_sql(expression)
@@ -2176,7 +2200,7 @@ class Generator:
     def safeconcat_sql(self, expression: exp.SafeConcat) -> str:
         expressions = expression.expressions
         if self.STRICT_STRING_CONCAT:
-            expressions = (exp.cast(e, "text") for e in expressions)
+            expressions = [exp.cast(e, "text") for e in expressions]
         return self.func("CONCAT", *expressions)
 
     def check_sql(self, expression: exp.Check) -> str:
@@ -2589,6 +2613,26 @@ class Generator:
         return self.dpipe_sql(expression)
 
     def div_sql(self, expression: exp.Div) -> str:
+        l, r = expression.left, expression.right
+
+        if not self.SAFE_DIVISION and expression.args.get("safe"):
+            r.replace(exp.Nullif(this=r.copy(), expression=exp.Literal.number(0)))
+
+        if self.TYPED_DIVISION and not expression.args.get("typed"):
+            if not l.is_type(*exp.DataType.FLOAT_TYPES) and not r.is_type(
+                *exp.DataType.FLOAT_TYPES
+            ):
+                l.replace(exp.cast(l.copy(), to=exp.DataType.Type.DOUBLE))
+
+        elif not self.TYPED_DIVISION and expression.args.get("typed"):
+            if l.is_type(*exp.DataType.INTEGER_TYPES) and r.is_type(*exp.DataType.INTEGER_TYPES):
+                return self.sql(
+                    exp.cast(
+                        l / r,
+                        to=exp.DataType.Type.BIGINT,
+                    )
+                )
+
         return self.binary(expression, "/")
 
     def overlaps_sql(self, expression: exp.Overlaps) -> str:
@@ -2601,6 +2645,9 @@ class Generator:
         return f"{self.sql(expression, 'this')}.{self.sql(expression, 'expression')}"
 
     def eq_sql(self, expression: exp.EQ) -> str:
+        return self.binary(expression, "=")
+
+    def propertyeq_sql(self, expression: exp.PropertyEQ) -> str:
         return self.binary(expression, "=")
 
     def escape_sql(self, expression: exp.Escape) -> str:
@@ -2997,6 +3044,11 @@ class Generator:
         this = self.sql(expression, "this")
         expression_sql = self.sql(expression, "expression")
         return f"FOR {this} DO {expression_sql}"
+
+    def refresh_sql(self, expression: exp.Refresh) -> str:
+        this = self.sql(expression, "this")
+        table = "" if isinstance(expression.this, exp.Literal) else "TABLE "
+        return f"REFRESH {table}{this}"
 
     def _simplify_unless_literal(self, expression: E) -> E:
         if not isinstance(expression, exp.Literal):

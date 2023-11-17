@@ -687,7 +687,7 @@ class TestHive(Validator):
             "x div y",
             write={
                 "duckdb": "x // y",
-                "presto": "CAST(x / y AS INTEGER)",
+                "presto": "CAST(CAST(x AS DOUBLE) / y AS INTEGER)",
                 "hive": "CAST(x / y AS INT)",
                 "spark": "CAST(x / y AS INT)",
             },
@@ -707,11 +707,15 @@ class TestHive(Validator):
         self.validate_all(
             "COLLECT_SET(x)",
             read={
+                "doris": "COLLECT_SET(x)",
                 "presto": "SET_AGG(x)",
+                "snowflake": "ARRAY_UNIQUE_AGG(x)",
             },
             write={
-                "presto": "SET_AGG(x)",
+                "doris": "COLLECT_SET(x)",
                 "hive": "COLLECT_SET(x)",
+                "presto": "SET_AGG(x)",
+                "snowflake": "ARRAY_UNIQUE_AGG(x)",
                 "spark": "COLLECT_SET(x)",
             },
         )

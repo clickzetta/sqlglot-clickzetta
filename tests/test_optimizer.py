@@ -298,6 +298,13 @@ class TestOptimizer(unittest.TestCase):
 
         self.assertEqual(optimizer.normalize_identifiers.normalize_identifiers("a%").sql(), '"a%"')
 
+    def test_quote_identifiers(self):
+        self.check_file(
+            "quote_identifiers",
+            optimizer.qualify_columns.quote_identifiers,
+            set_dialect=True,
+        )
+
     def test_pushdown_projection(self):
         self.check_file("pushdown_projections", pushdown_projections, schema=self.schema)
 
@@ -576,6 +583,14 @@ FROM READ_CSV('tests/fixtures/optimizer/tpc-h/nation.csv.gz', 'delimiter', '|') 
         self.assertEqual(expression.right.this.type.this, exp.DataType.Type.INT)
         self.assertEqual(expression.right.this.left.type.this, exp.DataType.Type.INT)
         self.assertEqual(expression.right.this.right.type.this, exp.DataType.Type.INT)
+
+    def test_typeddiv_annotation(self):
+        expressions = annotate_types(
+            parse_one("SELECT 2 / 3, 2 / 3.0", dialect="presto")
+        ).expressions
+
+        self.assertEqual(expressions[0].type.this, exp.DataType.Type.BIGINT)
+        self.assertEqual(expressions[1].type.this, exp.DataType.Type.DOUBLE)
 
     def test_bracket_annotation(self):
         expression = annotate_types(parse_one("SELECT A[:]")).expressions[0]
@@ -874,6 +889,8 @@ FROM READ_CSV('tests/fixtures/optimizer/tpc-h/nation.csv.gz', 'delimiter', '|') 
             ("MAX", "cold"): exp.DataType.Type.DATE,
             ("COUNT", "colb"): exp.DataType.Type.BIGINT,
             ("STDDEV", "cola"): exp.DataType.Type.DOUBLE,
+            ("ABS", "cola"): exp.DataType.Type.SMALLINT,
+            ("ABS", "colb"): exp.DataType.Type.FLOAT,
         }
 
         for (func, col), target_type in tests.items():

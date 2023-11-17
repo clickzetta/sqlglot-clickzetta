@@ -109,6 +109,7 @@ class TestDuckDB(Validator):
             parse_one("a // b", read="duckdb").assert_is(exp.IntDiv).sql(dialect="duckdb"), "a // b"
         )
 
+        self.validate_identity("SELECT UNNEST(column, recursive := TRUE) FROM table")
         self.validate_identity("VAR_POP(a)")
         self.validate_identity("SELECT * FROM foo ASOF LEFT JOIN bar ON a = b")
         self.validate_identity("PIVOT Cities ON Year USING SUM(Population)")
@@ -355,14 +356,14 @@ class TestDuckDB(Validator):
             "STRUCT_PACK(x := 1, y := '2')",
             write={
                 "duckdb": "{'x': 1, 'y': '2'}",
-                "spark": "STRUCT(x = 1, y = '2')",
+                "spark": "STRUCT(1 AS x, '2' AS y)",
             },
         )
         self.validate_all(
             "STRUCT_PACK(key1 := 'value1', key2 := 42)",
             write={
                 "duckdb": "{'key1': 'value1', 'key2': 42}",
-                "spark": "STRUCT(key1 = 'value1', key2 = 42)",
+                "spark": "STRUCT('value1' AS key1, 42 AS key2)",
             },
         )
         self.validate_all(
@@ -535,7 +536,7 @@ class TestDuckDB(Validator):
             write={
                 "bigquery": "UNIX_TO_TIME(x / 1000)",
                 "duckdb": "TO_TIMESTAMP(x / 1000)",
-                "presto": "FROM_UNIXTIME(x / 1000)",
+                "presto": "FROM_UNIXTIME(CAST(x AS DOUBLE) / 1000)",
                 "spark": "CAST(FROM_UNIXTIME(x / 1000) AS TIMESTAMP)",
             },
         )
@@ -651,22 +652,25 @@ class TestDuckDB(Validator):
             "CAST(ROW(1, ROW(1)) AS STRUCT(number BIGINT, row STRUCT(number BIGINT)))"
         )
 
-        self.validate_all("CAST(x AS NUMERIC(1, 2))", write={"duckdb": "CAST(x AS DECIMAL(1, 2))"})
-        self.validate_all("CAST(x AS HUGEINT)", write={"duckdb": "CAST(x AS INT128)"})
-        self.validate_all("CAST(x AS CHAR)", write={"duckdb": "CAST(x AS TEXT)"})
-        self.validate_all("CAST(x AS BPCHAR)", write={"duckdb": "CAST(x AS TEXT)"})
-        self.validate_all("CAST(x AS STRING)", write={"duckdb": "CAST(x AS TEXT)"})
-        self.validate_all("CAST(x AS INT1)", write={"duckdb": "CAST(x AS TINYINT)"})
-        self.validate_all("CAST(x AS FLOAT4)", write={"duckdb": "CAST(x AS REAL)"})
-        self.validate_all("CAST(x AS FLOAT)", write={"duckdb": "CAST(x AS REAL)"})
-        self.validate_all("CAST(x AS INT4)", write={"duckdb": "CAST(x AS INT)"})
-        self.validate_all("CAST(x AS INTEGER)", write={"duckdb": "CAST(x AS INT)"})
-        self.validate_all("CAST(x AS SIGNED)", write={"duckdb": "CAST(x AS INT)"})
-        self.validate_all("CAST(x AS BLOB)", write={"duckdb": "CAST(x AS BLOB)"})
-        self.validate_all("CAST(x AS BYTEA)", write={"duckdb": "CAST(x AS BLOB)"})
-        self.validate_all("CAST(x AS BINARY)", write={"duckdb": "CAST(x AS BLOB)"})
-        self.validate_all("CAST(x AS VARBINARY)", write={"duckdb": "CAST(x AS BLOB)"})
-        self.validate_all("CAST(x AS LOGICAL)", write={"duckdb": "CAST(x AS BOOLEAN)"})
+        self.validate_identity("CAST(x AS INT64)", "CAST(x AS BIGINT)")
+        self.validate_identity("CAST(x AS INT32)", "CAST(x AS INT)")
+        self.validate_identity("CAST(x AS INT16)", "CAST(x AS SMALLINT)")
+        self.validate_identity("CAST(x AS NUMERIC(1, 2))", "CAST(x AS DECIMAL(1, 2))")
+        self.validate_identity("CAST(x AS HUGEINT)", "CAST(x AS INT128)")
+        self.validate_identity("CAST(x AS CHAR)", "CAST(x AS TEXT)")
+        self.validate_identity("CAST(x AS BPCHAR)", "CAST(x AS TEXT)")
+        self.validate_identity("CAST(x AS STRING)", "CAST(x AS TEXT)")
+        self.validate_identity("CAST(x AS INT1)", "CAST(x AS TINYINT)")
+        self.validate_identity("CAST(x AS FLOAT4)", "CAST(x AS REAL)")
+        self.validate_identity("CAST(x AS FLOAT)", "CAST(x AS REAL)")
+        self.validate_identity("CAST(x AS INT4)", "CAST(x AS INT)")
+        self.validate_identity("CAST(x AS INTEGER)", "CAST(x AS INT)")
+        self.validate_identity("CAST(x AS SIGNED)", "CAST(x AS INT)")
+        self.validate_identity("CAST(x AS BLOB)", "CAST(x AS BLOB)")
+        self.validate_identity("CAST(x AS BYTEA)", "CAST(x AS BLOB)")
+        self.validate_identity("CAST(x AS BINARY)", "CAST(x AS BLOB)")
+        self.validate_identity("CAST(x AS VARBINARY)", "CAST(x AS BLOB)")
+        self.validate_identity("CAST(x AS LOGICAL)", "CAST(x AS BOOLEAN)")
         self.validate_all(
             "CAST(x AS NUMERIC)",
             write={
@@ -798,4 +802,18 @@ class TestDuckDB(Validator):
             write={
                 "duckdb": "SELECT CAST(w AS TIMESTAMP_S), CAST(x AS TIMESTAMP_MS), CAST(y AS TIMESTAMP), CAST(z AS TIMESTAMP_NS)",
             },
+        )
+
+    def test_isnan(self):
+        self.validate_all(
+            "ISNAN(x)",
+            read={"bigquery": "IS_NAN(x)"},
+            write={"bigquery": "IS_NAN(x)", "duckdb": "ISNAN(x)"},
+        )
+
+    def test_isinf(self):
+        self.validate_all(
+            "ISINF(x)",
+            read={"bigquery": "IS_INF(x)"},
+            write={"bigquery": "IS_INF(x)", "duckdb": "ISINF(x)"},
         )

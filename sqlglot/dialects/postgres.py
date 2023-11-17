@@ -243,6 +243,7 @@ class Postgres(Dialect):
         "YY": "%y",  # 15
         "YYYY": "%Y",  # 2015
     }
+    TYPED_DIVISION = True
 
     class Tokenizer(tokens.Tokenizer):
         BIT_STRINGS = [("b'", "'"), ("B'", "'")]
@@ -263,6 +264,7 @@ class Postgres(Dialect):
             "BEGIN TRANSACTION": TokenType.BEGIN,
             "BIGSERIAL": TokenType.BIGSERIAL,
             "CHARACTER VARYING": TokenType.VARCHAR,
+            "CONSTRAINT TRIGGER": TokenType.COMMAND,
             "DECLARE": TokenType.COMMAND,
             "DO": TokenType.COMMAND,
             "HSTORE": TokenType.HSTORE,

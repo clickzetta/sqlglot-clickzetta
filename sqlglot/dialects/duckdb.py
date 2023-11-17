@@ -84,7 +84,8 @@ def _parse_date_diff(args: t.List) -> exp.Expression:
 
 def _struct_sql(self: DuckDB.Generator, expression: exp.Struct) -> str:
     args = [
-        f"'{e.name or e.this.name}': {self.sql(e, 'expression')}" for e in expression.expressions
+        f"'{e.name or e.this.name}': {self.sql(e.expressions[0]) if isinstance(e, exp.Bracket) else self.sql(e, 'expression')}"
+        for e in expression.expressions
     ]
     return f"{{{', '.join(args)}}}"
 
@@ -108,6 +109,7 @@ def _json_format_sql(self: DuckDB.Generator, expression: exp.JSONFormat) -> str:
 class DuckDB(Dialect):
     NULL_ORDERING = "nulls_are_last"
     SUPPORTS_USER_DEFINED_TYPES = False
+    SAFE_DIVISION = True
 
     # https://duckdb.org/docs/sql/introduction.html#creating-a-new-table
     RESOLVES_IDENTIFIERS_AS_UPPERCASE = None
@@ -115,7 +117,7 @@ class DuckDB(Dialect):
     class Tokenizer(tokens.Tokenizer):
         KEYWORDS = {
             **tokens.Tokenizer.KEYWORDS,
-            ":=": TokenType.EQ,
+            ":=": TokenType.COLON_EQ,
             "//": TokenType.DIV,
             "ATTACH": TokenType.COMMAND,
             "BINARY": TokenType.VARBINARY,
@@ -124,8 +126,6 @@ class DuckDB(Dialect):
             "CHAR": TokenType.TEXT,
             "CHARACTER VARYING": TokenType.TEXT,
             "EXCLUDE": TokenType.EXCEPT,
-            "HUGEINT": TokenType.INT128,
-            "INT1": TokenType.TINYINT,
             "LOGICAL": TokenType.BOOLEAN,
             "PIVOT_WIDER": TokenType.PIVOT,
             "SIGNED": TokenType.INT,
@@ -277,6 +277,7 @@ class DuckDB(Dialect):
             exp.Encode: lambda self, e: encode_decode_sql(self, e, "ENCODE", replace=False),
             exp.Explode: rename_func("UNNEST"),
             exp.IntDiv: lambda self, e: self.binary(e, "//"),
+            exp.IsInf: rename_func("ISINF"),
             exp.IsNan: rename_func("ISNAN"),
             exp.JSONExtract: arrow_json_extract_sql,
             exp.JSONExtractScalar: arrow_json_extract_scalar_sql,
@@ -354,6 +355,9 @@ class DuckDB(Dialect):
             **generator.Generator.PROPERTIES_LOCATION,
             exp.VolatileProperty: exp.Properties.Location.UNSUPPORTED,
         }
+
+        def propertyeq_sql(self, expression: exp.PropertyEQ) -> str:
+            return self.binary(expression, ":=")
 
         def interval_sql(self, expression: exp.Interval) -> str:
             multiplier: t.Optional[int] = None

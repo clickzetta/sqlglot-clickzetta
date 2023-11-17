@@ -6,8 +6,13 @@ class TestTSQL(Validator):
     dialect = "tsql"
 
     def test_tsql(self):
+        self.validate_identity("SELECT TOP (2 + 1) 1")
+        self.validate_identity("SELECT * FROM t WHERE NOT c", "SELECT * FROM t WHERE NOT c <> 0")
+        self.validate_identity("1 AND true", "1 <> 0 AND (1 = 1)")
+        self.validate_identity("CAST(x AS int) OR y", "CAST(x AS INTEGER) <> 0 OR y <> 0")
+
         self.validate_all(
-            "WITH t(c) AS (SELECT 1) SELECT * INTO foo FROM (SELECT c FROM t) AS temp",
+            "WITH t(c) AS (SELECT 1) SELECT * INTO foo FROM (SELECT c AS c FROM t) AS temp",
             read={
                 "duckdb": "CREATE TABLE foo AS WITH t(c) AS (SELECT 1) SELECT c FROM t",
             },
@@ -25,7 +30,7 @@ class TestTSQL(Validator):
             },
         )
         self.validate_all(
-            "WITH t(c) AS (SELECT 1) MERGE INTO x AS z USING (SELECT c FROM t) AS y ON a = b WHEN MATCHED THEN UPDATE SET a = y.b",
+            "WITH t(c) AS (SELECT 1) MERGE INTO x AS z USING (SELECT c AS c FROM t) AS y ON a = b WHEN MATCHED THEN UPDATE SET a = y.b",
             read={
                 "postgres": "MERGE INTO x AS z USING (WITH t(c) AS (SELECT 1) SELECT c FROM t) AS y ON a = b WHEN MATCHED THEN UPDATE SET a = y.b",
             },
@@ -229,11 +234,13 @@ class TestTSQL(Validator):
         self.validate_all(
             "HASHBYTES('SHA1', x)",
             read={
+                "snowflake": "SHA1(x)",
                 "spark": "SHA(x)",
             },
             write={
-                "tsql": "HASHBYTES('SHA1', x)",
+                "snowflake": "SHA1(x)",
                 "spark": "SHA(x)",
+                "tsql": "HASHBYTES('SHA1', x)",
             },
         )
         self.validate_all(
@@ -561,6 +568,21 @@ class TestTSQL(Validator):
         )
 
     def test_ddl(self):
+        expression = parse_one("ALTER TABLE dbo.DocExe DROP CONSTRAINT FK_Column_B", dialect="tsql")
+        self.assertIsInstance(expression, exp.AlterTable)
+        self.assertIsInstance(expression.args["actions"][0], exp.Drop)
+        self.assertEqual(
+            expression.sql(dialect="tsql"), "ALTER TABLE dbo.DocExe DROP CONSTRAINT FK_Column_B"
+        )
+
+        for clusterd_keyword in ("CLUSTERED", "NONCLUSTERED"):
+            self.validate_identity(
+                'CREATE TABLE "dbo"."benchmark" ('
+                '"name" CHAR(7) NOT NULL, '
+                '"internal_id" VARCHAR(10) NOT NULL, '
+                f'UNIQUE {clusterd_keyword} ("internal_id" ASC))'
+            )
+
         self.validate_identity(
             "CREATE PROCEDURE foo AS BEGIN DELETE FROM bla WHERE foo < CURRENT_TIMESTAMP - 7 END",
             "CREATE PROCEDURE foo AS BEGIN DELETE FROM bla WHERE foo < GETDATE() - 7 END",
@@ -586,6 +608,12 @@ class TestTSQL(Validator):
             "SELECT * INTO foo.bar.baz FROM (SELECT * FROM a.b.c) AS temp",
             read={
                 "": "CREATE TABLE foo.bar.baz AS SELECT * FROM a.b.c",
+            },
+        )
+        self.validate_all(
+            "SELECT * INTO foo.bar.baz FROM (SELECT * FROM a.b.c) AS temp",
+            read={
+                "": "CREATE TABLE foo.bar.baz AS (SELECT * FROM a.b.c)",
             },
         )
         self.validate_all(
@@ -622,7 +650,6 @@ class TestTSQL(Validator):
                 "tsql": "CREATE OR ALTER VIEW a.b AS SELECT 1",
             },
         )
-
         self.validate_all(
             "ALTER TABLE a ADD b INTEGER, c INTEGER",
             read={
@@ -633,7 +660,6 @@ class TestTSQL(Validator):
                 "tsql": "ALTER TABLE a ADD b INTEGER, c INTEGER",
             },
         )
-
         self.validate_all(
             "CREATE TABLE #mytemp (a INTEGER, b CHAR(2), c TIME(4), d FLOAT(24))",
             write={
@@ -833,7 +859,7 @@ WHERE
         )
 
     def test_len(self):
-        self.validate_all("LEN(x)", write={"spark": "LENGTH(x)"})
+        self.validate_all("LEN(x)", read={"": "LENGTH(x)"}, write={"spark": "LENGTH(x)"})
 
     def test_replicate(self):
         self.validate_all("REPLICATE('x', 2)", write={"spark": "REPEAT('x', 2)"})
@@ -1121,9 +1147,11 @@ WHERE
 
     def test_iif(self):
         self.validate_identity(
-            "SELECT IF(cond, 'True', 'False')", "SELECT IIF(cond, 'True', 'False')"
+            "SELECT IF(cond, 'True', 'False')", "SELECT IIF(cond <> 0, 'True', 'False')"
         )
-        self.validate_identity("SELECT IIF(cond, 'True', 'False')")
+        self.validate_identity(
+            "SELECT IIF(cond, 'True', 'False')", "SELECT IIF(cond <> 0, 'True', 'False')"
+        )
         self.validate_all(
             "SELECT IIF(cond, 'True', 'False');",
             write={
@@ -1451,5 +1479,30 @@ FROM OPENJSON(@json) WITH (
                 "databricks": "SET count = (SELECT COUNT(1) FROM x)",
                 "tsql": "SET @count = (SELECT COUNT(1) FROM x)",
                 "spark": "SET count = (SELECT COUNT(1) FROM x)",
+            },
+        )
+
+    def test_qualify_derived_table_outputs(self):
+        self.validate_identity(
+            "WITH t AS (SELECT 1) SELECT * FROM t",
+            'WITH t AS (SELECT 1 AS "1") SELECT * FROM t',
+        )
+        self.validate_identity(
+            'WITH t AS (SELECT "c") SELECT * FROM t',
+            'WITH t AS (SELECT "c" AS "c") SELECT * FROM t',
+        )
+        self.validate_identity(
+            "SELECT * FROM (SELECT 1) AS subq",
+            'SELECT * FROM (SELECT 1 AS "1") AS subq',
+        )
+        self.validate_identity(
+            'SELECT * FROM (SELECT "c") AS subq',
+            'SELECT * FROM (SELECT "c" AS "c") AS subq',
+        )
+
+        self.validate_all(
+            "WITH t1(c) AS (SELECT 1), t2 AS (SELECT CAST(c AS INTEGER) AS c FROM t1) SELECT * FROM t2",
+            read={
+                "duckdb": "WITH t1(c) AS (SELECT 1), t2 AS (SELECT CAST(c AS INTEGER) FROM t1) SELECT * FROM t2",
             },
         )

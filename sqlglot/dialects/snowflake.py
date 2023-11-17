@@ -3,6 +3,7 @@ from __future__ import annotations
 import typing as t
 
 from sqlglot import exp, generator, parser, tokens, transforms
+from sqlglot._typing import E
 from sqlglot.dialects.dialect import (
     Dialect,
     binary_from_function,
@@ -236,6 +237,19 @@ class Snowflake(Dialect):
         "ff6": "%f",
     }
 
+    @classmethod
+    def quote_identifier(cls, expression: E, identify: bool = True) -> E:
+        # This disables quoting DUAL in SELECT ... FROM DUAL, because Snowflake treats an
+        # unquoted DUAL keyword in a special way and does not map it to a user-defined table
+        if (
+            isinstance(expression, exp.Identifier)
+            and isinstance(expression.parent, exp.Table)
+            and expression.name.lower() == "dual"
+        ):
+            return t.cast(E, expression)
+
+        return super().quote_identifier(expression, identify=identify)
+
     class Parser(parser.Parser):
         IDENTIFY_PIVOT_STRINGS = True
 
@@ -349,7 +363,7 @@ class Snowflake(Dialect):
             table: t.Optional[exp.Expression] = None
             if self._match_text_seq("@"):
                 table_name = "@"
-                while True:
+                while self._curr:
                     self._advance()
                     table_name += self._prev.text
                     if not self._match_set(self.STAGED_FILE_SINGLE_TOKENS, advance=False):
@@ -457,6 +471,7 @@ class Snowflake(Dialect):
         AGGREGATE_FILTER_SUPPORTED = False
         SUPPORTS_TABLE_COPY = False
         COLLATE_IS_FUNC = True
+        LIMIT_ONLY_LITERALS = True
 
         TRANSFORMS = {
             **generator.Generator.TRANSFORMS,
@@ -505,6 +520,7 @@ class Snowflake(Dialect):
                     transforms.eliminate_semi_and_anti_joins,
                 ]
             ),
+            exp.SHA: rename_func("SHA1"),
             exp.StarMap: rename_func("OBJECT_CONSTRUCT"),
             exp.StartsWith: rename_func("STARTSWITH"),
             exp.StrPosition: lambda self, e: self.func(
@@ -546,6 +562,20 @@ class Snowflake(Dialect):
             exp.SetProperty: exp.Properties.Location.UNSUPPORTED,
             exp.VolatileProperty: exp.Properties.Location.UNSUPPORTED,
         }
+
+        def trycast_sql(self, expression: exp.TryCast) -> str:
+            value = expression.this
+
+            if value.type is None:
+                from sqlglot.optimizer.annotate_types import annotate_types
+
+                value = annotate_types(value)
+
+            if value.is_type(*exp.DataType.TEXT_TYPES, exp.DataType.Type.UNKNOWN):
+                return super().trycast_sql(expression)
+
+            # TRY_CAST only works for string values in Snowflake
+            return self.cast_sql(expression)
 
         def log_sql(self, expression: exp.Log) -> str:
             if not expression.expression:

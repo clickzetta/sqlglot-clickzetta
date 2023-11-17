@@ -289,11 +289,47 @@ class TestExecutor(unittest.TestCase):
                 ["a"],
                 [(1,), (2,), (3,)],
             ),
+            (
+                "SELECT 1 AS a UNION SELECT 2 AS a UNION SELECT 3 AS a",
+                ["a"],
+                [(1,), (2,), (3,)],
+            ),
+            (
+                "SELECT 1 / 2 AS a",
+                ["a"],
+                [
+                    (0.5,),
+                ],
+            ),
+            ("SELECT 1 / 0 AS a", ["a"], ZeroDivisionError),
+            (
+                exp.select(
+                    exp.alias_(exp.Literal.number(1).div(exp.Literal.number(2), typed=True), "a")
+                ),
+                ["a"],
+                [
+                    (0,),
+                ],
+            ),
+            (
+                exp.select(
+                    exp.alias_(exp.Literal.number(1).div(exp.Literal.number(0), safe=True), "a")
+                ),
+                ["a"],
+                [
+                    (None,),
+                ],
+            ),
         ]:
             with self.subTest(sql):
-                result = execute(sql, schema=schema, tables=tables)
-                self.assertEqual(result.columns, tuple(cols))
-                self.assertEqual(set(result.rows), set(rows))
+                if isinstance(rows, list):
+                    result = execute(sql, schema=schema, tables=tables)
+                    self.assertEqual(result.columns, tuple(cols))
+                    self.assertEqual(set(result.rows), set(rows))
+                else:
+                    with self.assertRaises(ExecuteError) as ctx:
+                        execute(sql, schema=schema, tables=tables)
+                    self.assertIsInstance(ctx.exception.__cause__, rows)
 
     def test_execute_catalog_db_table(self):
         tables = {
@@ -632,6 +668,10 @@ class TestExecutor(unittest.TestCase):
             ("DATEDIFF('2022-01-03'::date, '2022-01-01'::TIMESTAMP::DATE)", 2),
             ("TRIM(' foo ')", "foo"),
             ("TRIM('afoob', 'ab')", "foo"),
+            ("ARRAY_JOIN(['foo', 'bar'], ':')", "foo:bar"),
+            ("ARRAY_JOIN(['hello', null ,'world'], ' ', ',')", "hello , world"),
+            ("ARRAY_JOIN(['', null ,'world'], ' ', ',')", " , world"),
+            ("STRUCT('foo', 'bar', null, null)", {"foo": "bar"}),
         ]:
             with self.subTest(sql):
                 result = execute(f"SELECT {sql}")
@@ -724,6 +764,11 @@ class TestExecutor(unittest.TestCase):
             (
                 "SELECT a, SUM(b) FROM x GROUP BY a ORDER BY COUNT(*) DESC",
                 [(1, 50), (2, 45), (3, 28)],
+                ("a", "_col_1"),
+            ),
+            (
+                "SELECT a, ARRAY_UNIQUE_AGG(b) FROM x GROUP BY a",
+                [(1, [40, 10]), (2, [25, 20]), (3, [28])],
                 ("a", "_col_1"),
             ),
         ):

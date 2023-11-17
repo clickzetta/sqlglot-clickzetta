@@ -165,6 +165,7 @@ class TypeAnnotator(metaclass=_TypeAnnotator):
         exp.DataType.Type.DOUBLE: {
             exp.ApproxQuantile,
             exp.Avg,
+            exp.Div,
             exp.Exp,
             exp.Ln,
             exp.Log,
@@ -247,6 +248,7 @@ class TypeAnnotator(metaclass=_TypeAnnotator):
             for data_type, expressions in TYPE_TO_EXPRESSIONS.items()
             for expr_type in expressions
         },
+        exp.Abs: lambda self, e: self._annotate_by_args(e, "this"),
         exp.Anonymous: lambda self, e: self._annotate_with_type(e, exp.DataType.Type.UNKNOWN),
         exp.Array: lambda self, e: self._annotate_by_args(e, "expressions", array=True),
         exp.ArrayAgg: lambda self, e: self._annotate_by_args(e, "this", array=True),
@@ -260,6 +262,7 @@ class TypeAnnotator(metaclass=_TypeAnnotator):
         exp.DateSub: lambda self, e: self._annotate_timeunit(e),
         exp.DateTrunc: lambda self, e: self._annotate_timeunit(e),
         exp.Distinct: lambda self, e: self._annotate_by_args(e, "expressions"),
+        exp.Div: lambda self, e: self._annotate_div(e),
         exp.Filter: lambda self, e: self._annotate_by_args(e, "this"),
         exp.If: lambda self, e: self._annotate_by_args(e, "true", "false"),
         exp.Interval: lambda self, e: self._annotate_with_type(e, exp.DataType.Type.INTERVAL),
@@ -269,6 +272,7 @@ class TypeAnnotator(metaclass=_TypeAnnotator):
         exp.Max: lambda self, e: self._annotate_by_args(e, "this", "expressions"),
         exp.Min: lambda self, e: self._annotate_by_args(e, "this", "expressions"),
         exp.Null: lambda self, e: self._annotate_with_type(e, exp.DataType.Type.NULL),
+        exp.Nullif: lambda self, e: self._annotate_by_args(e, "this", "expression"),
         exp.Slice: lambda self, e: self._annotate_with_type(e, exp.DataType.Type.UNKNOWN),
         exp.Sum: lambda self, e: self._annotate_by_args(e, "this", "expressions", promote=True),
         exp.TryCast: lambda self, e: self._annotate_with_type(e, e.args["to"]),
@@ -529,5 +533,21 @@ class TypeAnnotator(metaclass=_TypeAnnotator):
             self._set_type(expression, value_type or exp.DataType.Type.UNKNOWN)
         else:
             self._set_type(expression, exp.DataType.Type.UNKNOWN)
+
+        return expression
+
+    def _annotate_div(self, expression: exp.Div) -> exp.Div:
+        self._annotate_args(expression)
+
+        left_type, right_type = expression.left.type.this, expression.right.type.this  # type: ignore
+
+        if (
+            expression.args.get("typed")
+            and left_type in exp.DataType.INTEGER_TYPES
+            and right_type in exp.DataType.INTEGER_TYPES
+        ):
+            self._set_type(expression, exp.DataType.Type.BIGINT)
+        else:
+            self._set_type(expression, self._maybe_coerce(left_type, right_type))
 
         return expression

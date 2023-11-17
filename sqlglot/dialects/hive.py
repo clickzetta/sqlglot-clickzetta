@@ -120,16 +120,21 @@ def _date_diff_sql(self: Hive.Generator, expression: exp.DateDiff) -> str:
 
 def _json_format_sql(self: Hive.Generator, expression: exp.JSONFormat) -> str:
     this = expression.this
-    if is_parse_json(this) and this.this.is_string:
-        # Since FROM_JSON requires a nested type, we always wrap the json string with
-        # an array to ensure that "naked" strings like "'a'" will be handled correctly
-        wrapped_json = exp.Literal.string(f"[{this.this.name}]")
 
-        from_json = self.func("FROM_JSON", wrapped_json, self.func("SCHEMA_OF_JSON", wrapped_json))
-        to_json = self.func("TO_JSON", from_json)
+    if is_parse_json(this):
+        if this.this.is_string:
+            # Since FROM_JSON requires a nested type, we always wrap the json string with
+            # an array to ensure that "naked" strings like "'a'" will be handled correctly
+            wrapped_json = exp.Literal.string(f"[{this.this.name}]")
 
-        # This strips the [, ] delimiters of the dummy array printed by TO_JSON
-        return self.func("REGEXP_EXTRACT", to_json, "'^.(.*).$'", "1")
+            from_json = self.func(
+                "FROM_JSON", wrapped_json, self.func("SCHEMA_OF_JSON", wrapped_json)
+            )
+            to_json = self.func("TO_JSON", from_json)
+
+            # This strips the [, ] delimiters of the dummy array printed by TO_JSON
+            return self.func("REGEXP_EXTRACT", to_json, "'^.(.*).$'", "1")
+        return self.sql(this)
 
     return self.func("TO_JSON", this, expression.args.get("options"))
 
@@ -182,6 +187,7 @@ class Hive(Dialect):
     ALIAS_POST_TABLESAMPLE = True
     IDENTIFIERS_CAN_START_WITH_DIGIT = True
     SUPPORTS_USER_DEFINED_TYPES = False
+    SAFE_DIVISION = True
 
     # https://spark.apache.org/docs/latest/sql-ref-identifier.html#description
     RESOLVES_IDENTIFIERS_AS_UPPERCASE = None
@@ -241,10 +247,10 @@ class Hive(Dialect):
             "ADD JAR": TokenType.COMMAND,
             "ADD JARS": TokenType.COMMAND,
             "MSCK REPAIR": TokenType.COMMAND,
-            "REFRESH": TokenType.COMMAND,
-            "WITH SERDEPROPERTIES": TokenType.SERDE_PROPERTIES,
+            "REFRESH": TokenType.REFRESH,
             "TIMESTAMP AS OF": TokenType.TIMESTAMP_SNAPSHOT,
             "VERSION AS OF": TokenType.VERSION_SNAPSHOT,
+            "WITH SERDEPROPERTIES": TokenType.SERDE_PROPERTIES,
         }
 
         NUMERIC_LITERALS = {
@@ -264,7 +270,7 @@ class Hive(Dialect):
             **parser.Parser.FUNCTIONS,
             "BASE64": exp.ToBase64.from_arg_list,
             "COLLECT_LIST": exp.ArrayAgg.from_arg_list,
-            "COLLECT_SET": exp.SetAgg.from_arg_list,
+            "COLLECT_SET": exp.ArrayUniqueAgg.from_arg_list,
             "DATE_ADD": lambda args: exp.TsOrDsAdd(
                 this=seq_get(args, 0), expression=seq_get(args, 1), unit=exp.Literal.string("DAY")
             ),
@@ -411,7 +417,13 @@ class Hive(Dialect):
         INDEX_ON = "ON TABLE"
         EXTRACT_ALLOWS_QUOTES = False
         NVL2_SUPPORTED = False
-        SUPPORTS_NESTED_CTES = False
+
+        EXPRESSIONS_WITHOUT_NESTED_CTES = {
+            exp.Insert,
+            exp.Select,
+            exp.Subquery,
+            exp.Union,
+        }
 
         TYPE_MAPPING = {
             **generator.Generator.TYPE_MAPPING,
@@ -477,7 +489,7 @@ class Hive(Dialect):
             exp.Right: right_to_substring_sql,
             exp.SafeDivide: no_safe_divide_sql,
             exp.SchemaCommentProperty: lambda self, e: self.naked_property(e),
-            exp.SetAgg: rename_func("COLLECT_SET"),
+            exp.ArrayUniqueAgg: rename_func("COLLECT_SET"),
             exp.Split: lambda self, e: f"SPLIT({self.sql(e, 'this')}, CONCAT('\\\\Q', {self.sql(e, 'expression')}))",
             exp.StrPosition: strposition_to_locate_sql,
             exp.StrToDate: _str_to_date_sql,
@@ -571,6 +583,8 @@ class Hive(Dialect):
                 and not expression.expressions
             ):
                 expression = exp.DataType.build("text")
+            elif expression.is_type(exp.DataType.Type.TEXT) and expression.expressions:
+                expression.set("this", exp.DataType.Type.VARCHAR)
             elif expression.this in exp.DataType.TEMPORAL_TYPES:
                 expression = exp.DataType.build(expression.this)
             elif expression.is_type("float"):

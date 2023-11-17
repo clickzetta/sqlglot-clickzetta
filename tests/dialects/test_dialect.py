@@ -7,6 +7,7 @@ from sqlglot import (
     ParseError,
     TokenError,
     UnsupportedError,
+    exp,
     parse_one,
 )
 from sqlglot.dialects import Hive
@@ -1269,13 +1270,6 @@ class TestDialect(Validator):
             },
         )
         self.validate_all(
-            "SELECT * FROM a ORDER BY col_a NULLS LAST",
-            write={
-                "mysql": UnsupportedError,
-                "starrocks": UnsupportedError,
-            },
-        )
-        self.validate_all(
             "POSITION(needle in haystack)",
             write={
                 "drill": "STRPOS(haystack, needle)",
@@ -1442,6 +1436,76 @@ class TestDialect(Validator):
                 "spark": "FILTER(the_array, x -> x > 0)",
             },
         )
+        self.validate_all(
+            "a / b",
+            write={
+                "bigquery": "a / b",
+                "clickhouse": "a / b",
+                "databricks": "a / b",
+                "duckdb": "a / b",
+                "hive": "a / b",
+                "mysql": "a / b",
+                "oracle": "a / b",
+                "snowflake": "a / b",
+                "spark": "a / b",
+                "starrocks": "a / b",
+                "drill": "CAST(a AS DOUBLE) / b",
+                "postgres": "CAST(a AS DOUBLE PRECISION) / b",
+                "presto": "CAST(a AS DOUBLE) / b",
+                "redshift": "CAST(a AS DOUBLE PRECISION) / b",
+                "sqlite": "CAST(a AS REAL) / b",
+                "teradata": "CAST(a AS DOUBLE) / b",
+                "trino": "CAST(a AS DOUBLE) / b",
+                "tsql": "CAST(a AS FLOAT) / b",
+            },
+        )
+
+    def test_typeddiv(self):
+        typed_div = exp.Div(this=exp.column("a"), expression=exp.column("b"), typed=True)
+        div = exp.Div(this=exp.column("a"), expression=exp.column("b"))
+        typed_div_dialect = "presto"
+        div_dialect = "hive"
+        INT = exp.DataType.Type.INT
+        FLOAT = exp.DataType.Type.FLOAT
+
+        for expression, types, dialect, expected in [
+            (typed_div, (None, None), typed_div_dialect, "a / b"),
+            (typed_div, (None, None), div_dialect, "a / b"),
+            (div, (None, None), typed_div_dialect, "CAST(a AS DOUBLE) / b"),
+            (div, (None, None), div_dialect, "a / b"),
+            (typed_div, (INT, INT), typed_div_dialect, "a / b"),
+            (typed_div, (INT, INT), div_dialect, "CAST(a / b AS BIGINT)"),
+            (div, (INT, INT), typed_div_dialect, "CAST(a AS DOUBLE) / b"),
+            (div, (INT, INT), div_dialect, "a / b"),
+            (typed_div, (FLOAT, FLOAT), typed_div_dialect, "a / b"),
+            (typed_div, (FLOAT, FLOAT), div_dialect, "a / b"),
+            (div, (FLOAT, FLOAT), typed_div_dialect, "a / b"),
+            (div, (FLOAT, FLOAT), div_dialect, "a / b"),
+            (typed_div, (INT, FLOAT), typed_div_dialect, "a / b"),
+            (typed_div, (INT, FLOAT), div_dialect, "a / b"),
+            (div, (INT, FLOAT), typed_div_dialect, "a / b"),
+            (div, (INT, FLOAT), div_dialect, "a / b"),
+        ]:
+            with self.subTest(f"{expression.__class__.__name__} {types} {dialect} -> {expected}"):
+                expression = expression.copy()
+                expression.left.type = types[0]
+                expression.right.type = types[1]
+                self.assertEqual(expected, expression.sql(dialect=dialect))
+
+    def test_safediv(self):
+        safe_div = exp.Div(this=exp.column("a"), expression=exp.column("b"), safe=True)
+        div = exp.Div(this=exp.column("a"), expression=exp.column("b"))
+        safe_div_dialect = "mysql"
+        div_dialect = "snowflake"
+
+        for expression, dialect, expected in [
+            (safe_div, safe_div_dialect, "a / b"),
+            (safe_div, div_dialect, "a / NULLIF(b, 0)"),
+            (div, safe_div_dialect, "a / b"),
+            (div, div_dialect, "a / b"),
+        ]:
+            with self.subTest(f"{expression.__class__.__name__} {dialect} -> {expected}"):
+                self.assertEqual(expected, expression.sql(dialect=dialect))
 
     def test_limit(self):
         self.validate_all(
@@ -1547,7 +1611,7 @@ class TestDialect(Validator):
             "CREATE TABLE t (b1 BINARY, b2 BINARY(1024), c1 TEXT, c2 TEXT(1024))",
             write={
                 "duckdb": "CREATE TABLE t (b1 BLOB, b2 BLOB(1024), c1 TEXT, c2 TEXT(1024))",
-                "hive": "CREATE TABLE t (b1 BINARY, b2 BINARY(1024), c1 STRING, c2 STRING(1024))",
+                "hive": "CREATE TABLE t (b1 BINARY, b2 BINARY(1024), c1 STRING, c2 VARCHAR(1024))",
                 "oracle": "CREATE TABLE t (b1 BLOB, b2 BLOB(1024), c1 CLOB, c2 CLOB(1024))",
                 "postgres": "CREATE TABLE t (b1 BYTEA, b2 BYTEA(1024), c1 TEXT, c2 TEXT(1024))",
                 "sqlite": "CREATE TABLE t (b1 BLOB, b2 BLOB(1024), c1 TEXT, c2 TEXT(1024))",
@@ -1864,7 +1928,7 @@ SELECT
             write={
                 "bigquery": "SELECT * FROM (WITH t AS (SELECT 1 AS c) SELECT c FROM t) AS subq",
                 "clickhouse": "SELECT * FROM (WITH t AS (SELECT 1 AS c) SELECT c FROM t) AS subq",
-                "databricks": "SELECT * FROM (WITH t AS (SELECT 1 AS c) SELECT c FROM t) AS subq",
+                "databricks": "WITH t AS (SELECT 1 AS c) SELECT * FROM (SELECT c FROM t) AS subq",
                 "duckdb": "SELECT * FROM (WITH t AS (SELECT 1 AS c) SELECT c FROM t) AS subq",
                 "hive": "WITH t AS (SELECT 1 AS c) SELECT * FROM (SELECT c FROM t) AS subq",
                 "mysql": "SELECT * FROM (WITH t AS (SELECT 1 AS c) SELECT c FROM t) AS subq",
@@ -1872,11 +1936,11 @@ SELECT
                 "presto": "SELECT * FROM (WITH t AS (SELECT 1 AS c) SELECT c FROM t) AS subq",
                 "redshift": "SELECT * FROM (WITH t AS (SELECT 1 AS c) SELECT c FROM t) AS subq",
                 "snowflake": "SELECT * FROM (WITH t AS (SELECT 1 AS c) SELECT c FROM t) AS subq",
-                "spark": "SELECT * FROM (WITH t AS (SELECT 1 AS c) SELECT c FROM t) AS subq",
+                "spark": "WITH t AS (SELECT 1 AS c) SELECT * FROM (SELECT c FROM t) AS subq",
                 "spark2": "WITH t AS (SELECT 1 AS c) SELECT * FROM (SELECT c FROM t) AS subq",
                 "sqlite": "SELECT * FROM (WITH t AS (SELECT 1 AS c) SELECT c FROM t) AS subq",
                 "trino": "SELECT * FROM (WITH t AS (SELECT 1 AS c) SELECT c FROM t) AS subq",
-                "tsql": "WITH t AS (SELECT 1 AS c) SELECT * FROM (SELECT c FROM t) AS subq",
+                "tsql": "WITH t AS (SELECT 1 AS c) SELECT * FROM (SELECT c AS c FROM t) AS subq",
             },
         )
         self.validate_all(
@@ -1885,13 +1949,60 @@ SELECT
                 "bigquery": "SELECT * FROM (SELECT * FROM (WITH t AS (SELECT 1 AS c) SELECT c FROM t) AS subq1) AS subq2",
                 "duckdb": "SELECT * FROM (SELECT * FROM (WITH t AS (SELECT 1 AS c) SELECT c FROM t) AS subq1) AS subq2",
                 "hive": "WITH t AS (SELECT 1 AS c) SELECT * FROM (SELECT * FROM (SELECT c FROM t) AS subq1) AS subq2",
-                "tsql": "WITH t AS (SELECT 1 AS c) SELECT * FROM (SELECT * FROM (SELECT c FROM t) AS subq1) AS subq2",
+                "tsql": "WITH t AS (SELECT 1 AS c) SELECT * FROM (SELECT * FROM (SELECT c AS c FROM t) AS subq1) AS subq2",
             },
         )
         self.validate_all(
             "WITH t1(x) AS (SELECT 1) SELECT * FROM (WITH t2(y) AS (SELECT 2) SELECT y FROM t2) AS subq",
             write={
                 "duckdb": "WITH t1(x) AS (SELECT 1) SELECT * FROM (WITH t2(y) AS (SELECT 2) SELECT y FROM t2) AS subq",
-                "tsql": "WITH t1(x) AS (SELECT 1), t2(y) AS (SELECT 2) SELECT * FROM (SELECT y FROM t2) AS subq",
+                "tsql": "WITH t1(x) AS (SELECT 1), t2(y) AS (SELECT 2) SELECT * FROM (SELECT y AS y FROM t2) AS subq",
             },
         )
+
+    def test_unsupported_null_ordering(self):
+        # We'll transpile a portable query from the following dialects to MySQL / T-SQL, which
+        # both treat NULLs as small values, so the expected output queries should be equivalent
+        with_last_nulls = "duckdb"
+        with_small_nulls = "spark"
+        with_large_nulls = "postgres"
+
+        sql = "SELECT * FROM t ORDER BY c"
+        sql_nulls_last = "SELECT * FROM t ORDER BY CASE WHEN c IS NULL THEN 1 ELSE 0 END, c"
+        sql_nulls_first = "SELECT * FROM t ORDER BY CASE WHEN c IS NULL THEN 1 ELSE 0 END DESC, c"
+
+        for read_dialect, desc, nulls_first, expected_sql in (
+            (with_last_nulls, False, None, sql_nulls_last),
+            (with_last_nulls, True, None, sql),
+            (with_last_nulls, False, True, sql),
+            (with_last_nulls, True, True, sql_nulls_first),
+            (with_last_nulls, False, False, sql_nulls_last),
+            (with_last_nulls, True, False, sql),
+            (with_small_nulls, False, None, sql),
+            (with_small_nulls, True, None, sql),
+            (with_small_nulls, False, True, sql),
+            (with_small_nulls, True, True, sql_nulls_first),
+            (with_small_nulls, False, False, sql_nulls_last),
+            (with_small_nulls, True, False, sql),
+            (with_large_nulls, False, None, sql_nulls_last),
+            (with_large_nulls, True, None, sql_nulls_first),
+            (with_large_nulls, False, True, sql),
+            (with_large_nulls, True, True, sql_nulls_first),
+            (with_large_nulls, False, False, sql_nulls_last),
+            (with_large_nulls, True, False, sql),
+        ):
+            with self.subTest(
+                f"read: {read_dialect}, descending: {desc}, nulls first: {nulls_first}"
+            ):
+                sort_order = " DESC" if desc else ""
+                null_order = (
+                    " NULLS FIRST"
+                    if nulls_first
+                    else (" NULLS LAST" if nulls_first is not None else "")
+                )
+
+                expected_sql = f"{expected_sql}{sort_order}"
+                expression = parse_one(f"{sql}{sort_order}{null_order}", read=read_dialect)
+
+                self.assertEqual(expression.sql(dialect="mysql"), expected_sql)
+                self.assertEqual(expression.sql(dialect="tsql"), expected_sql)

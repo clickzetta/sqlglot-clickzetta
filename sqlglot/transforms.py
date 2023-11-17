@@ -394,6 +394,7 @@ def eliminate_full_outer_join(expression: exp.Expression) -> exp.Expression:
             index, full_outer_join = full_outer_joins[0]
             full_outer_join.set("side", "left")
             expression_copy.args["joins"][index].set("side", "right")
+            expression_copy.args.pop("with", None)  # remove CTEs from RIGHT side
 
             return exp.union(expression, expression_copy, copy=False)
 
@@ -426,6 +427,24 @@ def move_ctes_to_top_level(expression: exp.Expression) -> exp.Expression:
                 top_level_with.set("recursive", True)
 
             top_level_with.expressions.extend(inner_with.expressions)
+
+    return expression
+
+
+def ensure_bools(expression: exp.Expression) -> exp.Expression:
+    """Converts numeric values used in conditions into explicit boolean expressions."""
+    from sqlglot.optimizer.canonicalize import ensure_bools
+
+    def _ensure_bool(node: exp.Expression) -> None:
+        if (
+            node.is_number
+            or node.is_type(exp.DataType.Type.UNKNOWN, *exp.DataType.NUMERIC_TYPES)
+            or (isinstance(node, exp.Column) and not node.type)
+        ):
+            node.replace(node.neq(0))
+
+    for node, *_ in expression.walk():
+        ensure_bools(node, _ensure_bool)
 
     return expression
 

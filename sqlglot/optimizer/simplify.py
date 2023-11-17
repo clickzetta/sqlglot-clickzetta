@@ -507,6 +507,9 @@ def simplify_literals(expression, root=True):
                 return exp.Literal.number(value[1:])
             return exp.Literal.number(f"-{value}")
 
+    if type(expression) in INVERSE_DATE_OPS:
+        return _simplify_binary(expression, expression.this, expression.interval()) or expression
+
     return expression
 
 
@@ -557,15 +560,21 @@ def _simplify_binary(expression, a, b):
     elif _is_date_literal(a) and isinstance(b, exp.Interval):
         a, b = extract_date(a), extract_interval(b)
         if a and b:
-            if isinstance(expression, exp.Add):
+            if isinstance(expression, (exp.Add, exp.DateAdd, exp.DatetimeAdd)):
                 return date_literal(a + b)
-            if isinstance(expression, exp.Sub):
+            if isinstance(expression, (exp.Sub, exp.DateSub, exp.DatetimeSub)):
                 return date_literal(a - b)
     elif isinstance(a, exp.Interval) and _is_date_literal(b):
         a, b = extract_interval(a), extract_date(b)
         # you cannot subtract a date from an interval
         if a and b and isinstance(expression, exp.Add):
             return date_literal(a + b)
+    elif _is_date_literal(a) and _is_date_literal(b):
+        if isinstance(expression, exp.Predicate):
+            a, b = extract_date(a), extract_date(b)
+            boolean = eval_boolean(expression, a, b)
+            if boolean:
+                return boolean
 
     return None
 
@@ -590,6 +599,11 @@ def simplify_parens(expression):
     return expression
 
 
+NONNULL_CONSTANTS = (
+    exp.Literal,
+    exp.Boolean,
+)
+
 CONSTANTS = (
     exp.Literal,
     exp.Boolean,
@@ -597,11 +611,19 @@ CONSTANTS = (
 )
 
 
+def _is_nonnull_constant(expression: exp.Expression) -> bool:
+    return isinstance(expression, NONNULL_CONSTANTS) or _is_date_literal(expression)
+
+
+def _is_constant(expression: exp.Expression) -> bool:
+    return isinstance(expression, CONSTANTS) or _is_date_literal(expression)
+
+
 def simplify_coalesce(expression):
     # COALESCE(x) -> x
     if (
         isinstance(expression, exp.Coalesce)
-        and not expression.expressions
+        and (not expression.expressions or _is_nonnull_constant(expression.this))
         # COALESCE is also used as a Spark partitioning hint
         and not isinstance(expression.parent, exp.Hint)
     ):
@@ -621,12 +643,12 @@ def simplify_coalesce(expression):
 
     # This transformation is valid for non-constants,
     # but it really only does anything if they are both constants.
-    if not isinstance(other, CONSTANTS):
+    if not _is_constant(other):
         return expression
 
     # Find the first constant arg
     for arg_index, arg in enumerate(coalesce.expressions):
-        if isinstance(arg, CONSTANTS):
+        if _is_constant(other):
             break
     else:
         return expression
@@ -947,7 +969,7 @@ def cast_value(value: t.Any, to: exp.DataType) -> t.Optional[t.Union[datetime.da
 def extract_date(cast: exp.Expression) -> t.Optional[t.Union[datetime.date, datetime.date]]:
     if isinstance(cast, exp.Cast):
         to = cast.to
-    elif isinstance(cast, exp.TsOrDsToDate):
+    elif isinstance(cast, exp.TsOrDsToDate) and not cast.args.get("format"):
         to = exp.DataType.build(exp.DataType.Type.DATE)
     else:
         return None
@@ -966,12 +988,11 @@ def _is_date_literal(expression: exp.Expression) -> bool:
 
 
 def extract_interval(expression):
-    n = int(expression.name)
-    unit = expression.text("unit").lower()
-
     try:
+        n = int(expression.name)
+        unit = expression.text("unit").lower()
         return interval(unit, n)
-    except (UnsupportedUnit, ModuleNotFoundError):
+    except (UnsupportedUnit, ModuleNotFoundError, ValueError):
         return None
 
 
