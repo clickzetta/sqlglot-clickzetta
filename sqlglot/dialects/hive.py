@@ -4,10 +4,12 @@ import typing as t
 
 from sqlglot import exp, generator, parser, tokens, transforms
 from sqlglot.dialects.dialect import (
+    DATE_ADD_OR_SUB,
     Dialect,
     approx_count_distinct_sql,
     arg_max_or_min_no_count,
     create_with_partitions_sql,
+    datestrtodate_sql,
     format_time_lambda,
     if_sql,
     is_parse_json,
@@ -76,7 +78,10 @@ def _create_sql(self, expression: exp.Create) -> str:
     return create_with_partitions_sql(self, expression)
 
 
-def _add_date_sql(self: Hive.Generator, expression: exp.DateAdd | exp.DateSub) -> str:
+def _add_date_sql(self: Hive.Generator, expression: DATE_ADD_OR_SUB) -> str:
+    if isinstance(expression, exp.TsOrDsAdd) and not expression.unit:
+        return self.func("DATE_ADD", expression.this, expression.expression)
+
     unit = expression.text("unit").upper()
     func, multiplier = DATE_DELTA_INTERVAL.get(unit, ("DATE_ADD", 1))
 
@@ -95,7 +100,7 @@ def _add_date_sql(self: Hive.Generator, expression: exp.DateAdd | exp.DateSub) -
     return self.func(func, expression.this, modified_increment)
 
 
-def _date_diff_sql(self: Hive.Generator, expression: exp.DateDiff) -> str:
+def _date_diff_sql(self: Hive.Generator, expression: exp.DateDiff | exp.TsOrDsDiff) -> str:
     unit = expression.text("unit").upper()
 
     factor = TIME_DIFF_FACTOR.get(unit)
@@ -111,11 +116,12 @@ def _date_diff_sql(self: Hive.Generator, expression: exp.DateDiff) -> str:
     multiplier_sql = f" / {multiplier}" if multiplier > 1 else ""
     diff_sql = f"{sql_func}({self.format_args(expression.this, expression.expression)})"
 
-    if months_between:
-        # MONTHS_BETWEEN returns a float, so we need to truncate the fractional part
-        diff_sql = f"CAST({diff_sql} AS INT)"
+    if months_between or multiplier_sql:
+        # MONTHS_BETWEEN returns a float, so we need to truncate the fractional part.
+        # For the same reason, we want to truncate if there's a divisor present.
+        diff_sql = f"CAST({diff_sql}{multiplier_sql} AS INT)"
 
-    return f"{diff_sql}{multiplier_sql}"
+    return diff_sql
 
 
 def _json_format_sql(self: Hive.Generator, expression: exp.JSONFormat) -> str:
@@ -457,7 +463,7 @@ class Hive(Dialect):
             exp.With: no_recursive_cte_sql,
             exp.DateAdd: _add_date_sql,
             exp.DateDiff: _date_diff_sql,
-            exp.DateStrToDate: rename_func("TO_DATE"),
+            exp.DateStrToDate: datestrtodate_sql,
             exp.DateSub: _add_date_sql,
             exp.DateToDi: lambda self, e: f"CAST(DATE_FORMAT({self.sql(e, 'this')}, {Hive.DATEINT_FORMAT}) AS INT)",
             exp.DiToDate: lambda self, e: f"TO_DATE(CAST({self.sql(e, 'this')} AS STRING), {Hive.DATEINT_FORMAT})",
@@ -503,7 +509,8 @@ class Hive(Dialect):
             exp.TimeToUnix: rename_func("UNIX_TIMESTAMP"),
             exp.ToBase64: rename_func("BASE64"),
             exp.TsOrDiToDi: lambda self, e: f"CAST(SUBSTR(REPLACE(CAST({self.sql(e, 'this')} AS STRING), '-', ''), 1, 8) AS INT)",
-            exp.TsOrDsAdd: lambda self, e: f"DATE_ADD({self.sql(e, 'this')}, {self.sql(e, 'expression')})",
+            exp.TsOrDsAdd: _add_date_sql,
+            exp.TsOrDsDiff: _date_diff_sql,
             exp.TsOrDsToDate: _to_date_sql,
             exp.TryCast: no_trycast_sql,
             exp.UnixToStr: lambda self, e: self.func(

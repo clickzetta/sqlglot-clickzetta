@@ -1,3 +1,4 @@
+from sqlglot import exp, parse_one
 from sqlglot.errors import UnsupportedError
 from tests.dialects.test_dialect import Validator
 
@@ -6,6 +7,11 @@ class TestOracle(Validator):
     dialect = "oracle"
 
     def test_oracle(self):
+        self.validate_identity("ALTER TABLE tbl_name DROP FOREIGN KEY fk_symbol")
+        self.assertIsInstance(
+            parse_one("ALTER TABLE tbl_name DROP FOREIGN KEY fk_symbol", dialect="oracle"),
+            exp.AlterTable,
+        )
         self.validate_identity(
             "ALTER TABLE Payments ADD (Stock NUMBER NOT NULL, dropid VARCHAR2(500) NOT NULL)"
         )

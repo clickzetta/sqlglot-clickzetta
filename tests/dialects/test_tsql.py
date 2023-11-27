@@ -6,6 +6,13 @@ class TestTSQL(Validator):
     dialect = "tsql"
 
     def test_tsql(self):
+        # https://learn.microsoft.com/en-us/previous-versions/sql/sql-server-2008-r2/ms187879(v=sql.105)?redirectedfrom=MSDN
+        # tsql allows .. which means use the default schema
+        self.validate_identity("SELECT * FROM a..b")
+        self.validate_identity("SELECT TestSpecialChar.Test# FROM TestSpecialChar")
+        self.validate_identity("SELECT TestSpecialChar.Test@ FROM TestSpecialChar")
+        self.validate_identity("SELECT TestSpecialChar.Test$ FROM TestSpecialChar")
+        self.validate_identity("SELECT TestSpecialChar.Test_ FROM TestSpecialChar")
         self.validate_identity("SELECT TOP (2 + 1) 1")
         self.validate_identity("SELECT * FROM t WHERE NOT c", "SELECT * FROM t WHERE NOT c <> 0")
         self.validate_identity("1 AND true", "1 <> 0 AND (1 = 1)")
@@ -171,18 +178,6 @@ class TestTSQL(Validator):
             "SELECT DISTINCT DepartmentName, PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY BaseRate) OVER (PARTITION BY DepartmentName) AS MedianCont FROM dbo.DimEmployee"
         )
 
-        self.validate_all(
-            "SELECT DATEPART(year, CAST('2017-01-01' AS DATE))",
-            read={"postgres": "SELECT DATE_PART('year', '2017-01-01'::DATE)"},
-        )
-        self.validate_all(
-            "SELECT DATEPART(month, CAST('2017-03-01' AS DATE))",
-            read={"postgres": "SELECT DATE_PART('month', '2017-03-01'::DATE)"},
-        )
-        self.validate_all(
-            "SELECT DATEPART(day, CAST('2017-01-02' AS DATE))",
-            read={"postgres": "SELECT DATE_PART('day', '2017-01-02'::DATE)"},
-        )
         self.validate_all(
             "SELECT CAST([a].[b] AS SMALLINT) FROM foo",
             write={
@@ -896,11 +891,50 @@ WHERE
         )
 
     def test_datepart(self):
+        self.validate_identity("DATEPART(QUARTER, x)", "DATEPART(QUARTER, CAST(x AS DATETIME2))")
+        self.validate_identity("DATEPART(YEAR, x)", "FORMAT(CAST(x AS DATETIME2), 'yyyy')")
+
         self.validate_all(
             "SELECT DATEPART(month,'1970-01-01')",
-            write={"spark": "SELECT DATE_FORMAT(CAST('1970-01-01' AS TIMESTAMP), 'MM')"},
+            write={
+                "postgres": "SELECT TO_CHAR(CAST('1970-01-01' AS TIMESTAMP), 'MM')",
+                "spark": "SELECT DATE_FORMAT(CAST('1970-01-01' AS TIMESTAMP), 'MM')",
+                "tsql": "SELECT FORMAT(CAST('1970-01-01' AS DATETIME2), 'MM')",
+            },
         )
-        self.validate_identity("DATEPART(YEAR, x)", "FORMAT(CAST(x AS DATETIME2), 'yyyy')")
+        self.validate_all(
+            "SELECT DATEPART(year, CAST('2017-01-01' AS DATE))",
+            read={
+                "postgres": "SELECT DATE_PART('year', '2017-01-01'::DATE)",
+            },
+            write={
+                "postgres": "SELECT TO_CHAR(CAST(CAST('2017-01-01' AS DATE) AS TIMESTAMP), 'YYYY')",
+                "spark": "SELECT DATE_FORMAT(CAST(CAST('2017-01-01' AS DATE) AS TIMESTAMP), 'yyyy')",
+                "tsql": "SELECT FORMAT(CAST(CAST('2017-01-01' AS DATE) AS DATETIME2), 'yyyy')",
+            },
+        )
+        self.validate_all(
+            "SELECT DATEPART(month, CAST('2017-03-01' AS DATE))",
+            read={
+                "postgres": "SELECT DATE_PART('month', '2017-03-01'::DATE)",
+            },
+            write={
+                "postgres": "SELECT TO_CHAR(CAST(CAST('2017-03-01' AS DATE) AS TIMESTAMP), 'MM')",
+                "spark": "SELECT DATE_FORMAT(CAST(CAST('2017-03-01' AS DATE) AS TIMESTAMP), 'MM')",
+                "tsql": "SELECT FORMAT(CAST(CAST('2017-03-01' AS DATE) AS DATETIME2), 'MM')",
+            },
+        )
+        self.validate_all(
+            "SELECT DATEPART(day, CAST('2017-01-02' AS DATE))",
+            read={
+                "postgres": "SELECT DATE_PART('day', '2017-01-02'::DATE)",
+            },
+            write={
+                "postgres": "SELECT TO_CHAR(CAST(CAST('2017-01-02' AS DATE) AS TIMESTAMP), 'DD')",
+                "spark": "SELECT DATE_FORMAT(CAST(CAST('2017-01-02' AS DATE) AS TIMESTAMP), 'dd')",
+                "tsql": "SELECT FORMAT(CAST(CAST('2017-01-02' AS DATE) AS DATETIME2), 'dd')",
+            },
+        )
 
     def test_convert_date_format(self):
         self.validate_all(
@@ -1099,10 +1133,7 @@ WHERE
 
     def test_date_diff(self):
         self.validate_identity("SELECT DATEDIFF(hour, 1.5, '2021-01-01')")
-        self.validate_identity(
-            "SELECT DATEDIFF(year, '2020-01-01', '2021-01-01')",
-            "SELECT DATEDIFF(year, CAST('2020-01-01' AS DATETIME2), CAST('2021-01-01' AS DATETIME2))",
-        )
+
         self.validate_all(
             "SELECT DATEDIFF(quarter, 0, '2021-01-01')",
             write={
@@ -1124,7 +1155,7 @@ WHERE
             write={
                 "tsql": "SELECT DATEDIFF(year, CAST('2020-01-01' AS DATETIME2), CAST('2021-01-01' AS DATETIME2))",
                 "spark": "SELECT DATEDIFF(year, CAST('2020-01-01' AS TIMESTAMP), CAST('2021-01-01' AS TIMESTAMP))",
-                "spark2": "SELECT CAST(MONTHS_BETWEEN(CAST('2021-01-01' AS TIMESTAMP), CAST('2020-01-01' AS TIMESTAMP)) AS INT) / 12",
+                "spark2": "SELECT CAST(MONTHS_BETWEEN(CAST('2021-01-01' AS TIMESTAMP), CAST('2020-01-01' AS TIMESTAMP)) / 12 AS INT)",
             },
         )
         self.validate_all(
@@ -1140,7 +1171,7 @@ WHERE
             write={
                 "databricks": "SELECT DATEDIFF(quarter, CAST('start' AS TIMESTAMP), CAST('end' AS TIMESTAMP))",
                 "spark": "SELECT DATEDIFF(quarter, CAST('start' AS TIMESTAMP), CAST('end' AS TIMESTAMP))",
-                "spark2": "SELECT CAST(MONTHS_BETWEEN(CAST('end' AS TIMESTAMP), CAST('start' AS TIMESTAMP)) AS INT) / 3",
+                "spark2": "SELECT CAST(MONTHS_BETWEEN(CAST('end' AS TIMESTAMP), CAST('start' AS TIMESTAMP)) / 3 AS INT)",
                 "tsql": "SELECT DATEDIFF(quarter, CAST('start' AS DATETIME2), CAST('end' AS DATETIME2))",
             },
         )

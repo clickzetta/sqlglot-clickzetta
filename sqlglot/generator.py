@@ -58,9 +58,6 @@ class Generator:
         exp.DateAdd: lambda self, e: self.func(
             "DATE_ADD", e.this, e.expression, exp.Literal.string(e.text("unit"))
         ),
-        exp.TsOrDsAdd: lambda self, e: self.func(
-            "TS_OR_DS_ADD", e.this, e.expression, exp.Literal.string(e.text("unit"))
-        ),
         exp.CaseSpecificColumnConstraint: lambda self, e: f"{'NOT ' if e.args.get('not_') else ''}CASESPECIFIC",
         exp.CharacterSetColumnConstraint: lambda self, e: f"CHARACTER SET {self.sql(e, 'this')}",
         exp.CharacterSetProperty: lambda self, e: f"{'DEFAULT ' if e.args.get('default') else ''}CHARACTER SET={self.sql(e, 'this')}",
@@ -1433,13 +1430,13 @@ class Generator:
 
     def table_sql(self, expression: exp.Table, sep: str = " AS ") -> str:
         table = ".".join(
-            part
-            for part in [
-                self.sql(expression, "catalog"),
-                self.sql(expression, "db"),
-                self.sql(expression, "this"),
-            ]
-            if part
+            self.sql(part)
+            for part in (
+                expression.args.get("catalog"),
+                expression.args.get("db"),
+                expression.args.get("this"),
+            )
+            if part is not None
         )
 
         version = self.sql(expression, "version")
@@ -2648,7 +2645,7 @@ class Generator:
         return self.binary(expression, "=")
 
     def propertyeq_sql(self, expression: exp.PropertyEQ) -> str:
-        return self.binary(expression, "=")
+        return self.binary(expression, ":=")
 
     def escape_sql(self, expression: exp.Escape) -> str:
         return self.binary(expression, "ESCAPE")

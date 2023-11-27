@@ -252,6 +252,7 @@ class Parser(metaclass=_Parser):
         TokenType.FUNCTION,
         TokenType.INDEX,
         TokenType.PROCEDURE,
+        TokenType.FOREIGN_KEY,
         *DB_CREATABLES,
     }
 
@@ -2687,7 +2688,7 @@ class Parser(metaclass=_Parser):
     def _parse_table_parts(self, schema: bool = False) -> exp.Table:
         catalog = None
         db = None
-        table = self._parse_table_part(schema=schema)
+        table: t.Optional[exp.Expression | str] = self._parse_table_part(schema=schema)
 
         while self._match(TokenType.DOT):
             if catalog:
@@ -2698,7 +2699,7 @@ class Parser(metaclass=_Parser):
             else:
                 catalog = db
                 db = table
-                table = self._parse_table_part(schema=schema)
+                table = self._parse_table_part(schema=schema) or ""
 
         if not table:
             self.raise_error(f"Expected table name but got {self._curr}")

@@ -8,6 +8,7 @@ from sqlglot import exp, generator, parser, tokens, transforms
 from sqlglot.dialects.dialect import (
     Dialect,
     any_value_to_max_sql,
+    date_delta_sql,
     generatedasidentitycolumnconstraint_sql,
     max_or_greatest,
     min_or_least,
@@ -135,13 +136,6 @@ def _parse_hashbytes(args: t.List) -> exp.Expression:
     return exp.func("HASHBYTES", *args)
 
 
-def generate_date_delta_with_unit_sql(
-    self: TSQL.Generator, expression: exp.DateAdd | exp.DateDiff
-) -> str:
-    func = "DATEADD" if isinstance(expression, exp.DateAdd) else "DATEDIFF"
-    return self.func(func, expression.text("unit"), expression.expression, expression.this)
-
-
 def _format_sql(self: TSQL.Generator, expression: exp.NumberToStr | exp.TimeToStr) -> str:
     fmt = (
         expression.args["format"]
@@ -153,6 +147,11 @@ def _format_sql(self: TSQL.Generator, expression: exp.NumberToStr | exp.TimeToSt
             )
         )
     )
+
+    # There is no format for "quarter"
+    if fmt.name.lower() == "quarter":
+        return self.func("DATEPART", "QUARTER", expression.this)
+
     return self.func("FORMAT", expression.this, fmt, expression.args.get("culture"))
 
 
@@ -245,9 +244,6 @@ class TSQL(Dialect):
 
     TIME_MAPPING = {
         "year": "%Y",
-        "qq": "%q",
-        "q": "%q",
-        "quarter": "%q",
         "dayofyear": "%j",
         "day": "%d",
         "dy": "%d",
@@ -354,6 +350,7 @@ class TSQL(Dialect):
         IDENTIFIERS = ['"', ("[", "]")]
         QUOTES = ["'", '"']
         HEX_STRINGS = [("0x", ""), ("0X", "")]
+        VAR_SINGLE_TOKENS = {"@", "$", "#"}
 
         KEYWORDS = {
             **tokens.Tokenizer.KEYWORDS,
@@ -659,8 +656,8 @@ class TSQL(Dialect):
             **generator.Generator.TRANSFORMS,
             exp.AnyValue: any_value_to_max_sql,
             exp.AutoIncrementColumnConstraint: lambda *_: "IDENTITY",
-            exp.DateAdd: generate_date_delta_with_unit_sql,
-            exp.DateDiff: generate_date_delta_with_unit_sql,
+            exp.DateAdd: date_delta_sql("DATEADD"),
+            exp.DateDiff: date_delta_sql("DATEDIFF"),
             exp.CTE: transforms.preprocess([qualify_derived_table_outputs]),
             exp.CurrentDate: rename_func("GETDATE"),
             exp.CurrentTimestamp: rename_func("GETDATE"),
@@ -683,13 +680,13 @@ class TSQL(Dialect):
             exp.Subquery: transforms.preprocess([qualify_derived_table_outputs]),
             exp.SHA: lambda self, e: self.func("HASHBYTES", exp.Literal.string("SHA1"), e.this),
             exp.SHA2: lambda self, e: self.func(
-                "HASHBYTES",
-                exp.Literal.string(f"SHA2_{e.args.get('length', 256)}"),
-                e.this,
+                "HASHBYTES", exp.Literal.string(f"SHA2_{e.args.get('length', 256)}"), e.this
             ),
             exp.TemporaryProperty: lambda self, e: "",
             exp.TimeStrToTime: timestrtotime_sql,
             exp.TimeToStr: _format_sql,
+            exp.TsOrDsAdd: date_delta_sql("DATEADD", cast=True),
+            exp.TsOrDsDiff: date_delta_sql("DATEDIFF"),
             exp.TsOrDsToDate: ts_or_ds_to_date_sql("tsql"),
         }
 

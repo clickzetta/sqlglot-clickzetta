@@ -153,6 +153,13 @@ class TestDuckDB(Validator):
         self.validate_all("x ~ y", write={"duckdb": "REGEXP_MATCHES(x, y)"})
         self.validate_all("SELECT * FROM 'x.y'", write={"duckdb": 'SELECT * FROM "x.y"'})
         self.validate_all(
+            "SELECT * FROM produce PIVOT(SUM(sales) FOR quarter IN ('Q1', 'Q2'))",
+            read={
+                "duckdb": "SELECT * FROM produce PIVOT(SUM(sales) FOR quarter IN ('Q1', 'Q2'))",
+                "snowflake": "SELECT * FROM produce PIVOT(SUM(produce.sales) FOR produce.quarter IN ('Q1', 'Q2'))",
+            },
+        )
+        self.validate_all(
             "SELECT UNNEST([1, 2, 3])",
             write={
                 "duckdb": "SELECT UNNEST([1, 2, 3])",
@@ -439,6 +446,16 @@ class TestDuckDB(Validator):
             "SELECT CAST(CAST(x AS DATE) AS DATE) + INTERVAL 1 DAY",
             read={
                 "hive": "SELECT DATE_ADD(TO_DATE(x), 1)",
+            },
+        )
+        self.validate_all(
+            "SELECT CAST('2018-01-01 00:00:00' AS DATE) + INTERVAL 3 DAY",
+            read={
+                "hive": "SELECT DATE_ADD('2018-01-01 00:00:00', 3)",
+            },
+            write={
+                "duckdb": "SELECT CAST('2018-01-01 00:00:00' AS DATE) + INTERVAL '3' DAY",
+                "hive": "SELECT CAST('2018-01-01 00:00:00' AS DATE) + INTERVAL '3' DAY",
             },
         )
         self.validate_all(

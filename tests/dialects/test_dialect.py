@@ -867,9 +867,9 @@ class TestDialect(Validator):
             write={
                 "drill": "CAST(x AS DATE)",
                 "duckdb": "CAST(x AS DATE)",
-                "hive": "TO_DATE(x)",
-                "presto": "CAST(DATE_PARSE(x, '%Y-%m-%d') AS DATE)",
-                "spark": "TO_DATE(x)",
+                "hive": "CAST(x AS DATE)",
+                "presto": "CAST(x AS DATE)",
+                "spark": "CAST(x AS DATE)",
                 "sqlite": "x",
             },
         )
@@ -894,7 +894,7 @@ class TestDialect(Validator):
         self.validate_all(
             "TS_OR_DS_ADD(CURRENT_DATE, 1, 'DAY')",
             write={
-                "presto": "DATE_ADD('DAY', 1, CURRENT_DATE)",
+                "presto": "DATE_ADD('DAY', 1, CAST(CAST(CURRENT_DATE AS TIMESTAMP) AS DATE))",
                 "hive": "DATE_ADD(CURRENT_DATE, 1)",
             },
         )

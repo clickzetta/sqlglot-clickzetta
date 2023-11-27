@@ -123,6 +123,7 @@ class TestMySQL(Validator):
         self.validate_identity("ALTER TABLE test_table ALTER COLUMN test_column SET DEFAULT 1")
 
     def test_identity(self):
+        self.validate_identity("SELECT @var1 := 1, @var2")
         self.validate_identity("UNLOCK TABLES")
         self.validate_identity("LOCK TABLES `app_fields` WRITE")
         self.validate_identity("SELECT 1 XOR 0")
@@ -530,7 +531,15 @@ class TestMySQL(Validator):
         )
         self.validate_all(
             "SELECT DATEDIFF(x, y)",
-            write={"mysql": "SELECT DATEDIFF(x, y)", "presto": "SELECT DATE_DIFF('day', y, x)"},
+            read={
+                "presto": "SELECT DATE_DIFF('day', y, x)",
+                "redshift": "SELECT DATEDIFF(day, y, x)",
+            },
+            write={
+                "mysql": "SELECT DATEDIFF(x, y)",
+                "presto": "SELECT DATE_DIFF('day', y, x)",
+                "redshift": "SELECT DATEDIFF(day, y, x)",
+            },
         )
         self.validate_all(
             "DAYOFYEAR(x)",
@@ -610,6 +619,7 @@ class TestMySQL(Validator):
                 "presto": "SELECT * FROM test OFFSET 1 LIMIT 1",
                 "snowflake": "SELECT * FROM test LIMIT 1 OFFSET 1",
                 "trino": "SELECT * FROM test OFFSET 1 LIMIT 1",
+                "bigquery": "SELECT * FROM test LIMIT 1 OFFSET 1",
             },
         )
         self.validate_all(
