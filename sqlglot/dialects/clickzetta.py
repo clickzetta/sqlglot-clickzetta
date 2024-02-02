@@ -3,10 +3,12 @@ import typing as t
 
 from sqlglot import exp, transforms
 from sqlglot.dialects.spark import Spark
+from sqlglot.expressions import Div
 from sqlglot.tokens import Tokenizer, TokenType
 from sqlglot.dialects.dialect import (
     rename_func,
 )
+
 
 def _transform_create(expression: exp.Expression) -> exp.Expression:
     """Remove index column constraints.
@@ -16,11 +18,12 @@ def _transform_create(expression: exp.Expression) -> exp.Expression:
         to_remove = []
         for e in schema.expressions:
             if isinstance(e, exp.IndexColumnConstraint) or \
-                isinstance(e, exp.UniqueColumnConstraint):
+                    isinstance(e, exp.UniqueColumnConstraint):
                 to_remove.append(e)
         for e in to_remove:
             schema.expressions.remove(e)
     return expression
+
 
 def _groupconcat_to_wmconcat(self: ClickZetta.Generator, expression: exp.GroupConcat) -> str:
     this = self.sql(expression, "this")
@@ -28,6 +31,7 @@ def _groupconcat_to_wmconcat(self: ClickZetta.Generator, expression: exp.GroupCo
     if not sep:
         sep = exp.Literal.string(',')
     return f"WM_CONCAT({sep}, {self.sql(this)})"
+
 
 def _anonymous_func(self: ClickZetta.Generator, expression: exp.Anonymous) -> str:
     # in MaxCompute, datetime(col) is a alias of cast(col as datetime)
@@ -40,8 +44,11 @@ def _anonymous_func(self: ClickZetta.Generator, expression: exp.Anonymous) -> st
     args = ", ".join(self.sql(e) for e in expression.expressions)
     return f"{expression.this}({args})"
 
-class ClickZetta(Spark):
+<<<<<<< HEAD
+=======
 
+>>>>>>> 2d6eb4d8 (support date_format_pg and div)
+class ClickZetta(Spark):
     NULL_ORDERING = "nulls_are_small"
 
     class Tokenizer(Spark.Tokenizer):
@@ -92,6 +99,20 @@ class ClickZetta(Spark):
             exp.AesDecrypt: rename_func("AES_DECRYPT_MYSQL"),
             exp.CurrentTime: lambda self, e: "DATE_FORMAT(NOW(),'HH:mm:ss')",
             exp.Anonymous: _anonymous_func,
+<<<<<<< HEAD
+=======
+            exp.AtTimeZone: lambda self, e: self.func(
+                "CONVERT_TIMEZONE", e.args.get("zone"), self._cz_integer_div_sql(e.this.args.get("this"))
+            ),
+            exp.UnixToTime: lambda self, e: self.func(
+                "CONVERT_TIMEZONE", "'UTC+0'", self._cz_integer_div_sql(e.this)
+            ),
+            exp.DistributedByProperty: lambda self, e: self.distributedbyproperty_sql(e),
+            exp.EngineProperty: lambda self, e: '',
+            exp.TimeToStr: lambda self, e: self.func(
+                "DATE_FORMAT_PG", e.this, str(e.args.get("format")).replace("%m", "mm")
+            ),
+>>>>>>> 2d6eb4d8 (support date_format_pg and div)
         }
 
         def datatype_sql(self, expression: exp.DataType) -> str:
@@ -122,11 +143,36 @@ class ClickZetta(Spark):
             format = expression.args.get('format')
             if format:
                 format_str = str(format).replace('mm', 'MM').replace('mi', 'mm')
-                return f"DATE_FORMAT({self.sql(this)}, {self.sql(format_str)})"
+                return f"DATE_FORMAT_PG({self.sql(this)}, {self.sql(format_str)})"
 
             return super().tochar_sql(expression)
 
-        def maybe_comment(self, sql: str, expression: exp.Expression | None = None, comments: List[str] | None = None) -> str:
+        def _cz_integer_div_sql(self, expression: exp.Div) -> Div | str:
+            if not isinstance(expression, exp.Div):
+                return expression
+            l, r = expression.left, expression.right
+
+            if not self.SAFE_DIVISION and expression.args.get("safe"):
+                r.replace(exp.Nullif(this=r.copy(), expression=exp.Literal.number(0)))
+
+            if self.TYPED_DIVISION and not expression.args.get("typed"):
+                if not l.is_type(*exp.DataType.FLOAT_TYPES) and not r.is_type(
+                        *exp.DataType.FLOAT_TYPES
+                ):
+                    l.replace(exp.cast(l.copy(), to=exp.DataType.Type.DOUBLE))
+
+            elif not self.TYPED_DIVISION and expression.args.get("typed"):
+                if l.is_type(*exp.DataType.INTEGER_TYPES) and r.is_type(*exp.DataType.INTEGER_TYPES):
+                    return self.sql(
+                        exp.cast(
+                            l / r,
+                            to=exp.DataType.Type.BIGINT,
+                        )
+                    )
+            return self.binary(expression, "DIV")
+
+        def maybe_comment(self, sql: str, expression: exp.Expression | None = None,
+                          comments: List[str] | None = None) -> str:
             comments = (
                 ((expression and expression.comments) if comments is None else comments)  # type: ignore
                 if self.comments
@@ -151,3 +197,117 @@ class ClickZetta(Spark):
                 )
 
             return f"{sql} {comments_sql}"
+<<<<<<< HEAD
+=======
+
+        def create_sql(self, expression: exp.Create) -> str:
+            kind = self.sql(expression, "kind").upper()
+            properties = expression.args.get("properties")
+            properties_locs = self.locate_properties(properties) if properties else defaultdict()
+            this = self.createable_sql(expression, properties_locs)
+
+            properties_sql = ""
+            if properties_locs.get(exp.Properties.Location.POST_SCHEMA) or properties_locs.get(
+                    exp.Properties.Location.POST_WITH
+            ):
+                properties_sql = self.sql(
+                    exp.Properties(
+                        expressions=[
+                            *properties_locs[exp.Properties.Location.POST_SCHEMA],
+                            *properties_locs[exp.Properties.Location.POST_WITH],
+                        ]
+                    )
+                )
+            # print("properties_locs:", properties_locs)
+            primarykey_sql = ""
+            if expression.args.get("kind") == "TABLE":
+                if properties_locs.get(exp.Properties.Location.POST_NAME):
+                    exp_list = properties_locs.get(exp.Properties.Location.POST_NAME)
+                    for express in exp_list:
+                        if express.key == "primarykey":
+                            primarykey_sql = self.sql(express)
+
+            begin = " BEGIN" if expression.args.get("begin") else ""
+            end = " END" if expression.args.get("end") else ""
+
+            expression_sql = self.sql(expression, "expression")
+            if expression_sql:
+                expression_sql = f"{begin}{self.sep()}{expression_sql}{end}"
+
+                if self.CREATE_FUNCTION_RETURN_AS or not isinstance(expression.expression, exp.Return):
+                    if properties_locs.get(exp.Properties.Location.POST_ALIAS):
+                        postalias_props_sql = self.properties(
+                            exp.Properties(
+                                expressions=properties_locs[exp.Properties.Location.POST_ALIAS]
+                            ),
+                            wrapped=False,
+                        )
+                        expression_sql = f" AS {postalias_props_sql}{expression_sql}"
+                    else:
+                        expression_sql = f" AS{expression_sql}"
+
+            postindex_props_sql = ""
+            if properties_locs.get(exp.Properties.Location.POST_INDEX):
+                postindex_props_sql = self.properties(
+                    exp.Properties(expressions=properties_locs[exp.Properties.Location.POST_INDEX]),
+                    wrapped=False,
+                    prefix=" ",
+                )
+
+            indexes = self.expressions(expression, key="indexes", indent=False, sep=" ")
+            indexes = f" {indexes}" if indexes else ""
+            index_sql = indexes + postindex_props_sql
+
+            replace = " OR REPLACE" if expression.args.get("replace") else ""
+            unique = " UNIQUE" if expression.args.get("unique") else ""
+
+            postcreate_props_sql = ""
+            if properties_locs.get(exp.Properties.Location.POST_CREATE):
+                postcreate_props_sql = self.properties(
+                    exp.Properties(expressions=properties_locs[exp.Properties.Location.POST_CREATE]),
+                    sep=" ",
+                    prefix=" ",
+                    wrapped=False,
+                )
+
+            modifiers = "".join((replace, unique, postcreate_props_sql))
+
+            postexpression_props_sql = ""
+            if properties_locs.get(exp.Properties.Location.POST_EXPRESSION):
+                postexpression_props_sql = self.properties(
+                    exp.Properties(
+                        expressions=properties_locs[exp.Properties.Location.POST_EXPRESSION]
+                    ),
+                    sep=" ",
+                    prefix=" ",
+                    wrapped=False,
+                )
+
+            exists_sql = " IF NOT EXISTS" if expression.args.get("exists") else ""
+            no_schema_binding = (
+                " WITH NO SCHEMA BINDING" if expression.args.get("no_schema_binding") else ""
+            )
+
+            clone = self.sql(expression, "clone")
+            clone = f" {clone}" if clone else ""
+
+            if expression.args.get("kind") == "TABLE":
+                if primarykey_sql == "":
+                    expression_sql = f"CREATE{modifiers} {kind}{exists_sql} {this}{self.seg(')', sep='')}{properties_sql}{expression_sql}{postexpression_props_sql}{index_sql}{no_schema_binding}{clone}"
+                else:
+                    expression_sql = f"CREATE{modifiers} {kind}{exists_sql} {this} {primarykey_sql}{self.seg(')', sep='')}{properties_sql}{expression_sql}{postexpression_props_sql}{index_sql}{no_schema_binding}{clone}"
+            else:
+                expression_sql = f"CREATE{modifiers} {kind}{exists_sql} {this}{properties_sql}{expression_sql}{postexpression_props_sql}{index_sql}{no_schema_binding}{clone}"
+            return self.prepend_ctes(expression, expression_sql)
+
+        def schema_sql(self, expression: exp.Schema) -> str:
+            this = self.sql(expression, "this")
+            sql = self.schema_columns_sql(expression)
+            return f"{this} {self.seg('(', sep='')}{sql}" if this and sql else this or sql
+
+        def schema_columns_sql(self, expression: exp.Schema) -> str:
+            if expression.expressions:
+                sql = f"{self.expressions(expression)}"
+                return sql
+            return ""
+>>>>>>> 2d6eb4d8 (support date_format_pg and div)
