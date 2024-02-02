@@ -4,10 +4,12 @@ import typing as t
 from collections import defaultdict
 from sqlglot import exp, transforms
 from sqlglot.dialects.spark import Spark
+from sqlglot.expressions import Div
 from sqlglot.tokens import Tokenizer, TokenType
 from sqlglot.dialects.dialect import (
     rename_func,
 )
+
 
 def _transform_create(expression: exp.Expression) -> exp.Expression:
     """Remove index column constraints.
@@ -17,11 +19,12 @@ def _transform_create(expression: exp.Expression) -> exp.Expression:
         to_remove = []
         for e in schema.expressions:
             if isinstance(e, exp.IndexColumnConstraint) or \
-                isinstance(e, exp.UniqueColumnConstraint):
+                    isinstance(e, exp.UniqueColumnConstraint):
                 to_remove.append(e)
         for e in to_remove:
             schema.expressions.remove(e)
     return expression
+
 
 def _groupconcat_to_wmconcat(self: ClickZetta.Generator, expression: exp.GroupConcat) -> str:
     this = self.sql(expression, "this")
@@ -29,6 +32,7 @@ def _groupconcat_to_wmconcat(self: ClickZetta.Generator, expression: exp.GroupCo
     if not sep:
         sep = exp.Literal.string(',')
     return f"WM_CONCAT({sep}, {self.sql(this)})"
+
 
 def _anonymous_func(self: ClickZetta.Generator, expression: exp.Anonymous) -> str:
     # in MaxCompute, datetime(col) is a alias of cast(col as datetime)
@@ -41,13 +45,8 @@ def _anonymous_func(self: ClickZetta.Generator, expression: exp.Anonymous) -> st
     args = ", ".join(self.sql(e) for e in expression.expressions)
     return f"{expression.this}({args})"
 
-def _convert_timezone(self: ClickZetta.Generator, expression: exp.Anonymous) -> str:
-    return self.func(
-            "CONVERT_TIMEZONE", expression.args.get("zone"), expression.this.args.get("this")
-        )
 
 class ClickZetta(Spark):
-
     NULL_ORDERING = "nulls_are_small"
 
     class Tokenizer(Spark.Tokenizer):
@@ -106,13 +105,16 @@ class ClickZetta(Spark):
             exp.CurrentTime: lambda self, e: "DATE_FORMAT(NOW(),'HH:mm:ss')",
             exp.Anonymous: _anonymous_func,
             exp.AtTimeZone: lambda self, e: self.func(
-                "CONVERT_TIMEZONE", e.args.get("zone"), e.this.args.get("this")
+                "CONVERT_TIMEZONE", e.args.get("zone"), self._cz_integer_div_sql(e.this.args.get("this"))
             ),
             exp.UnixToTime: lambda self, e: self.func(
-                "CONVERT_TIMEZONE","'UTC+0'", e.this
+                "CONVERT_TIMEZONE", "'UTC+0'", self._cz_integer_div_sql(e.this)
             ),
             exp.DistributedByProperty: lambda self, e: self.distributedbyproperty_sql(e),
             exp.EngineProperty: lambda self, e: '',
+            exp.TimeToStr: lambda self, e: self.func(
+                "DATE_FORMAT_PG", e.this, str(e.args.get("format")).replace("%m", "mm")
+            ),
         }
 
         def distributedbyproperty_sql(self, expression: exp.DistributedByProperty) -> str:
@@ -150,11 +152,36 @@ class ClickZetta(Spark):
             format = expression.args.get('format')
             if format:
                 format_str = str(format).replace('mm', 'MM').replace('mi', 'mm')
-                return f"DATE_FORMAT({self.sql(this)}, {self.sql(format_str)})"
+                return f"DATE_FORMAT_PG({self.sql(this)}, {self.sql(format_str)})"
 
             return super().tochar_sql(expression)
 
-        def maybe_comment(self, sql: str, expression: exp.Expression | None = None, comments: List[str] | None = None) -> str:
+        def _cz_integer_div_sql(self, expression: exp.Div) -> Div | str:
+            if not isinstance(expression, exp.Div):
+                return expression
+            l, r = expression.left, expression.right
+
+            if not self.SAFE_DIVISION and expression.args.get("safe"):
+                r.replace(exp.Nullif(this=r.copy(), expression=exp.Literal.number(0)))
+
+            if self.TYPED_DIVISION and not expression.args.get("typed"):
+                if not l.is_type(*exp.DataType.FLOAT_TYPES) and not r.is_type(
+                        *exp.DataType.FLOAT_TYPES
+                ):
+                    l.replace(exp.cast(l.copy(), to=exp.DataType.Type.DOUBLE))
+
+            elif not self.TYPED_DIVISION and expression.args.get("typed"):
+                if l.is_type(*exp.DataType.INTEGER_TYPES) and r.is_type(*exp.DataType.INTEGER_TYPES):
+                    return self.sql(
+                        exp.cast(
+                            l / r,
+                            to=exp.DataType.Type.BIGINT,
+                        )
+                    )
+            return self.binary(expression, "DIV")
+
+        def maybe_comment(self, sql: str, expression: exp.Expression | None = None,
+                          comments: List[str] | None = None) -> str:
             comments = (
                 ((expression and expression.comments) if comments is None else comments)  # type: ignore
                 if self.comments
@@ -180,17 +207,15 @@ class ClickZetta(Spark):
 
             return f"{sql} {comments_sql}"
 
-
         def create_sql(self, expression: exp.Create) -> str:
             kind = self.sql(expression, "kind").upper()
             properties = expression.args.get("properties")
             properties_locs = self.locate_properties(properties) if properties else defaultdict()
             this = self.createable_sql(expression, properties_locs)
 
-
             properties_sql = ""
             if properties_locs.get(exp.Properties.Location.POST_SCHEMA) or properties_locs.get(
-                exp.Properties.Location.POST_WITH
+                    exp.Properties.Location.POST_WITH
             ):
                 properties_sql = self.sql(
                     exp.Properties(
@@ -281,9 +306,8 @@ class ClickZetta(Spark):
             else:
                 expression_sql = f"CREATE{modifiers} {kind}{exists_sql} {this}{properties_sql}{expression_sql}{postexpression_props_sql}{index_sql}{no_schema_binding}{clone}"
             return self.prepend_ctes(expression, expression_sql)
-            
 
-        def schema_sql(self, expression: exp.Schema) -> str: 
+        def schema_sql(self, expression: exp.Schema) -> str:
             this = self.sql(expression, "this")
             sql = self.schema_columns_sql(expression)
             return f"{this} {self.seg('(', sep='')}{sql}" if this and sql else this or sql
