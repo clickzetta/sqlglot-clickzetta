@@ -44,10 +44,6 @@ def _anonymous_func(self: ClickZetta.Generator, expression: exp.Anonymous) -> st
     args = ", ".join(self.sql(e) for e in expression.expressions)
     return f"{expression.this}({args})"
 
-<<<<<<< HEAD
-=======
-
->>>>>>> 2d6eb4d8 (support date_format_pg and div)
 class ClickZetta(Spark):
     NULL_ORDERING = "nulls_are_small"
 
@@ -99,8 +95,6 @@ class ClickZetta(Spark):
             exp.AesDecrypt: rename_func("AES_DECRYPT_MYSQL"),
             exp.CurrentTime: lambda self, e: "DATE_FORMAT(NOW(),'HH:mm:ss')",
             exp.Anonymous: _anonymous_func,
-<<<<<<< HEAD
-=======
             exp.AtTimeZone: lambda self, e: self.func(
                 "CONVERT_TIMEZONE", e.args.get("zone"), self._cz_integer_div_sql(e.this.args.get("this"))
             ),
@@ -112,7 +106,6 @@ class ClickZetta(Spark):
             exp.TimeToStr: lambda self, e: self.func(
                 "DATE_FORMAT_PG", e.this, str(e.args.get("format")).replace("%m", "mm")
             ),
->>>>>>> 2d6eb4d8 (support date_format_pg and div)
         }
 
         def datatype_sql(self, expression: exp.DataType) -> str:
@@ -183,7 +176,7 @@ class ClickZetta(Spark):
                 return sql
 
             comments_sql = "\n".join(
-                f"-- {self.pad_comment(comment)}" for comment in comments if comment
+                f"/* {self.pad_comment(comment)} */" for comment in comments if comment
             )
 
             if not comments_sql:
@@ -197,8 +190,6 @@ class ClickZetta(Spark):
                 )
 
             return f"{sql} {comments_sql}"
-<<<<<<< HEAD
-=======
 
         def create_sql(self, expression: exp.Create) -> str:
             kind = self.sql(expression, "kind").upper()
@@ -310,4 +301,3 @@ class ClickZetta(Spark):
                 sql = f"{self.expressions(expression)}"
                 return sql
             return ""
->>>>>>> 2d6eb4d8 (support date_format_pg and div)
