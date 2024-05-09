@@ -2561,6 +2561,8 @@ class LanguageProperty(Property):
 class ClusteredByProperty(Property):
     arg_types = {"expressions": True, "sorted_by": False, "buckets": True}
 
+class DistributedByProperty(Property):
+    arg_types = {"expressions": True, "sorted_by": False, "buckets": True}
 
 class DictProperty(Property):
     arg_types = {"this": True, "kind": True, "settings": False}
@@ -2782,6 +2784,7 @@ class Properties(Expression):
         "COMMENT": SchemaCommentProperty,
         "DEFINER": DefinerProperty,
         "DISTKEY": DistKeyProperty,
+        "DISTRIBUTED_BY": DistributedByProperty,
         "DISTSTYLE": DistStyleProperty,
         "ENGINE": EngineProperty,
         "EXECUTE AS": ExecuteAsProperty,

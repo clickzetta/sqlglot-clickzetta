@@ -278,14 +278,11 @@ class Parser(metaclass=_Parser):
         TokenType.MEDIUMINT: TokenType.UMEDIUMINT,
         TokenType.SMALLINT: TokenType.USMALLINT,
         TokenType.TINYINT: TokenType.UTINYINT,
-<<<<<<< HEAD
         TokenType.DECIMAL: TokenType.UDECIMAL,
-=======
         # for float, double, decimal, just ignore unsigned https://dev.mysql.com/worklog/task/?id=12391
         TokenType.FLOAT: TokenType.FLOAT,
         TokenType.DOUBLE: TokenType.DOUBLE,
         TokenType.DECIMAL: TokenType.DECIMAL,
->>>>>>> 2c722b73 (fix wrong parse if constraint keyword same to column name)
     }
 
     SUBQUERY_PREDICATES = {

@@ -1,6 +1,7 @@
 from __future__ import annotations
 import typing as t
 
+from collections import defaultdict
 from sqlglot import exp, transforms
 from sqlglot.dialects.spark import Spark
 from sqlglot.expressions import Div
@@ -80,7 +81,14 @@ class ClickZetta(Spark):
             exp.DataType.Type.BIGSERIAL: "BIGINT",
             exp.DataType.Type.SERIAL: "INT",
             exp.DataType.Type.SMALLSERIAL: "SMALLINT",
+            exp.DataType.Type.BIGDECIMAL: "DECIMAL",
+        }
 
+        PROPERTIES_LOCATION = {
+            **Spark.Generator.PROPERTIES_LOCATION,
+            exp.DistributedByProperty: exp.Properties.Location.POST_SCHEMA,
+            exp.PrimaryKey: exp.Properties.Location.POST_NAME,
+            exp.EngineProperty: exp.Properties.Location.POST_SCHEMA,
         }
 
         TRANSFORMS = {
@@ -107,6 +115,13 @@ class ClickZetta(Spark):
                 "DATE_FORMAT_PG", e.this, str(e.args.get("format")).replace("%m", "mm")
             ),
         }
+
+        def distributedbyproperty_sql(self, expression: exp.DistributedByProperty) -> str:
+            expressions = self.expressions(expression, key="expressions", flat=True)
+            sorted_by = self.expressions(expression, key="sorted_by", flat=True)
+            sorted_by = f" SORTED BY ({sorted_by})" if sorted_by else ""
+            buckets = self.sql(expression, "buckets")
+            return f"HASH CLUSTERED BY ({expressions}){sorted_by} INTO {buckets} BUCKETS"
 
         def datatype_sql(self, expression: exp.DataType) -> str:
             """Remove unsupported type params from int types: eg. int(10) -> int
