@@ -192,7 +192,7 @@ class ClickZetta(Spark):
                 return sql
 
             comments_sql = "\n".join(
-                f"-- {self.pad_comment(comment)}" for comment in comments if comment
+                f"/* {self.pad_comment(comment)} */" for comment in comments if comment
             )
 
             if not comments_sql:
