@@ -8,7 +8,6 @@ from sqlglot.expressions import Div
 from sqlglot.tokens import Tokenizer, TokenType
 from sqlglot.dialects.dialect import (
     rename_func,
-    no_trycast_sql,
 )
 
 def _transform_create(expression: exp.Expression) -> exp.Expression:
@@ -117,7 +116,6 @@ class ClickZetta(Spark):
             exp.TimeToStr: lambda self, e: self.func(
                 "DATE_FORMAT_PG", e.this, str(e.args.get("format")).replace("%m", "mm")
             ),
-            exp.TryCast: no_trycast_sql,
         }
 
         def distributedbyproperty_sql(self, expression: exp.DistributedByProperty) -> str:
