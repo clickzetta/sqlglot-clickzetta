@@ -8,8 +8,8 @@ from sqlglot.expressions import Div
 from sqlglot.tokens import Tokenizer, TokenType
 from sqlglot.dialects.dialect import (
     rename_func,
+    no_trycast_sql,
 )
-
 
 def _transform_create(expression: exp.Expression) -> exp.Expression:
     """Remove index column constraints.
@@ -35,11 +35,13 @@ def _groupconcat_to_wmconcat(self: ClickZetta.Generator, expression: exp.GroupCo
 
 
 def _anonymous_func(self: ClickZetta.Generator, expression: exp.Anonymous) -> str:
-    # in MaxCompute, datetime(col) is a alias of cast(col as datetime)
     if expression.this.upper() == 'DATETIME':
+        # in MaxCompute, datetime(col) is an alias of cast(col as datetime)
         return f"{self.sql(expression.expressions[0])}::TIMESTAMP"
     elif expression.this.upper() == 'GETDATE':
         return f"CURRENT_TIMESTAMP()"
+    elif expression.this.upper() == 'TRY':
+        return self.sql(expression.expressions[0])
 
     # return as it is
     args = ", ".join(self.sql(e) for e in expression.expressions)
@@ -115,6 +117,7 @@ class ClickZetta(Spark):
             exp.TimeToStr: lambda self, e: self.func(
                 "DATE_FORMAT_PG", e.this, str(e.args.get("format")).replace("%m", "mm")
             ),
+            exp.TryCast: no_trycast_sql,
         }
 
         def distributedbyproperty_sql(self, expression: exp.DistributedByProperty) -> str:
