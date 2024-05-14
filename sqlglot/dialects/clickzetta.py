@@ -8,6 +8,7 @@ from sqlglot.expressions import Div
 from sqlglot.tokens import Tokenizer, TokenType
 from sqlglot.dialects.dialect import (
     rename_func,
+    if_sql,
 )
 
 def _transform_create(expression: exp.Expression) -> exp.Expression:
@@ -46,6 +47,10 @@ def _anonymous_func(self: ClickZetta.Generator, expression: exp.Anonymous) -> st
     args = ", ".join(self.sql(e) for e in expression.expressions)
     return f"{expression.this}({args})"
 
+def nullif_to_if(self: ClickZetta.Generator, expression: exp.Expression):
+    cond = exp.EQ(this=expression.this, expression=expression.expression)
+    ret = exp.If(this=cond, true=exp.Null(), false=expression.this)
+    return self.sql(ret)
 
 class ClickZetta(Spark):
     NULL_ORDERING = "nulls_are_small"
@@ -116,6 +121,12 @@ class ClickZetta(Spark):
             exp.TimeToStr: lambda self, e: self.func(
                 "DATE_FORMAT_PG", e.this, str(e.args.get("format")).replace("%m", "mm")
             ),
+            exp.Pow: rename_func("POW"),
+            exp.ApproxQuantile: rename_func("APPROX_PERCENTILE"),
+            exp.JSONFormat: rename_func("TO_JSON"),
+            exp.ParseJSON: lambda self, e: f"JSON {self.sql(e.this)}",
+            exp.Nullif: nullif_to_if,
+            exp.If: if_sql(false_value=exp.Null()),
         }
 
         def distributedbyproperty_sql(self, expression: exp.DistributedByProperty) -> str:
