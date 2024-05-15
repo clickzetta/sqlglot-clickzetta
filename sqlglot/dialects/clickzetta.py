@@ -47,9 +47,15 @@ def _anonymous_func(self: ClickZetta.Generator, expression: exp.Anonymous) -> st
     args = ", ".join(self.sql(e) for e in expression.expressions)
     return f"{expression.this}({args})"
 
-def nullif_to_if(self: ClickZetta.Generator, expression: exp.Expression):
+def nullif_to_if(self: ClickZetta.Generator, expression: exp.Nullif):
     cond = exp.EQ(this=expression.this, expression=expression.expression)
     ret = exp.If(this=cond, true=exp.Null(), false=expression.this)
+    return self.sql(ret)
+
+def unnest_to_values(self: ClickZetta.Generator, expression: exp.Unnest):
+    array = expression.expressions[0].expressions # TODO: could be dangerous?
+    alias = expression.args.get('alias')
+    ret = exp.Values(expressions=array, alias=alias)
     return self.sql(ret)
 
 class ClickZetta(Spark):
@@ -127,6 +133,7 @@ class ClickZetta(Spark):
             exp.ParseJSON: lambda self, e: f"JSON {self.sql(e.this)}",
             exp.Nullif: nullif_to_if,
             exp.If: if_sql(false_value=exp.Null()),
+            exp.Unnest: unnest_to_values,
         }
 
         def distributedbyproperty_sql(self, expression: exp.DistributedByProperty) -> str:
