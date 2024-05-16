@@ -124,9 +124,9 @@ class ClickZetta(Spark):
             ),
             exp.DistributedByProperty: lambda self, e: self.distributedbyproperty_sql(e),
             exp.EngineProperty: lambda self, e: '',
-            exp.TimeToStr: lambda self, e: self.func(
-                "DATE_FORMAT_PG", e.this, str(e.args.get("format")).replace("%m", "mm")
-            ),
+            # exp.TimeToStr: lambda self, e: self.func(
+            #     "DATE_FORMAT_PG", e.this, str(e.args.get("format")).replace("%m", "mm")
+            # ),
             exp.Pow: rename_func("POW"),
             exp.ApproxQuantile: rename_func("APPROX_PERCENTILE"),
             exp.JSONFormat: rename_func("TO_JSON"),
