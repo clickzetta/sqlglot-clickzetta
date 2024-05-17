@@ -60,6 +60,91 @@ def unnest_to_values(self: ClickZetta.Generator, expression: exp.Unnest):
     ret = exp.Values(expressions=array, alias=alias)
     return self.sql(ret)
 
+def quote_identifier_if_in_keywords(self: ClickZetta.Generator, expression: exp.Identifier):
+    if expression.name.upper() in ['ALL']:
+        return f'`{expression.name}`'
+    return expression.name
+# TODO: possible keyword list
+# ALL
+# AND
+# ANY
+# AS
+# AUTHORIZATION
+# BOTH
+# CASE
+# CAST
+# CHECK
+# COLLATE
+# COLUMN
+# CONSTRAINT
+# CREATE
+# CROSS
+# CUBE
+# CURRENT_DATE
+# CURRENT_TIME
+# CURRENT_TIMESTAMP
+# CURRENT_USER
+# DELETE
+# DISTINCT
+# ELSE
+# END
+# ESCAPE
+# EXCEPT
+# FALSE
+# FETCH
+# FILTER
+# FOR
+# FOREIGN
+# FROM
+# FULL
+# GRANT
+# GROUP
+# HAVING
+# IDENTITY
+# IN
+# INNER
+# INTERSECT
+# INTO
+# IS
+# JOIN
+# LATERAL
+# LEADING
+# LEFT
+# NATURAL
+# NOT
+# NULL
+# OFFSET
+# ON
+# ONLY
+# OR
+# ORDER
+# OUTER
+# OVERLAPS
+# PERCENTILE_CONT
+# PERCENTILE_DISC
+# PRIMARY
+# REFERENCES
+# RIGHT
+# ROLLUP
+# SELECT
+# SESSION_USER
+# SOME
+# TABLE
+# THEN
+# TIME
+# TO
+# TRAILING
+# TRUE
+# UNION
+# UNIQUE
+# UNKNOWN
+# USER
+# USING
+# WHEN
+# WHERE
+# WITH
+# WITHIN
+
 class ClickZetta(Spark):
     NULL_ORDERING = "nulls_are_small"
 
@@ -136,6 +221,7 @@ class ClickZetta(Spark):
             exp.Nullif: nullif_to_if,
             exp.If: if_sql(false_value=exp.Null()),
             exp.Unnest: unnest_to_values,
+            exp.Identifier: quote_identifier_if_in_keywords,
         }
 
         def distributedbyproperty_sql(self, expression: exp.DistributedByProperty) -> str:
