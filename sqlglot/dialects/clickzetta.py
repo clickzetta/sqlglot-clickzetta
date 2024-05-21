@@ -60,10 +60,10 @@ def unnest_to_values(self: ClickZetta.Generator, expression: exp.Unnest):
     ret = exp.Values(expressions=array, alias=alias)
     return self.sql(ret)
 
-def quote_identifier_if_in_keywords(self: ClickZetta.Generator, expression: exp.Identifier):
-    if expression.name.upper() in ['ALL']:
-        return f'`{expression.name}`'
-    return expression.name
+class ClickZetta(Spark):
+    NULL_ORDERING = "nulls_are_small"
+
+    RESERVED_KEYWORDS = {'all'}
 # TODO: possible keyword list
 # ALL
 # AND
@@ -145,9 +145,6 @@ def quote_identifier_if_in_keywords(self: ClickZetta.Generator, expression: exp.
 # WITH
 # WITHIN
 
-class ClickZetta(Spark):
-    NULL_ORDERING = "nulls_are_small"
-
     class Tokenizer(Spark.Tokenizer):
         KEYWORDS = {
             **Tokenizer.KEYWORDS,
@@ -221,7 +218,6 @@ class ClickZetta(Spark):
             exp.Nullif: nullif_to_if,
             exp.If: if_sql(false_value=exp.Null()),
             exp.Unnest: unnest_to_values,
-            exp.Identifier: quote_identifier_if_in_keywords,
         }
 
         def distributedbyproperty_sql(self, expression: exp.DistributedByProperty) -> str:
