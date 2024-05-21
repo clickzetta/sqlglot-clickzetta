@@ -1,5 +1,4 @@
 from __future__ import annotations
-import typing as t
 
 from collections import defaultdict
 from sqlglot import exp, transforms
@@ -10,6 +9,7 @@ from sqlglot.dialects.dialect import (
     rename_func,
     if_sql,
 )
+import os
 
 def _transform_create(expression: exp.Expression) -> exp.Expression:
     """Remove index column constraints.
@@ -59,6 +59,18 @@ def unnest_to_values(self: ClickZetta.Generator, expression: exp.Unnest):
     alias = expression.args.get('alias')
     ret = exp.Values(expressions=array, alias=alias)
     return self.sql(ret)
+
+def time_to_str(self: ClickZetta.Generator, expression: exp.TimeToStr):
+    this = self.sql(expression, "this")
+    read_dialect = os.environ.get('READ_DIALECT')
+    if read_dialect:
+        if read_dialect.upper() in ['MYSQL', 'PRESTO', 'TRINO', 'ATHENA', 'STARROCKS', 'DORIS']:
+            return f"DATE_FORMAT_MYSQL({this}, {self.sql(expression, 'format')})"
+        elif read_dialect.upper() in ['POSTGRES', 'REDSHIFT']:
+            return f"DATE_FORMAT_PG({this}, {self.sql(expression, 'format')})"
+    # fallback to hive implementation
+    time_format = self.format_time(expression)
+    return f"DATE_FORMAT({this}, {time_format})"
 
 class ClickZetta(Spark):
     NULL_ORDERING = "nulls_are_small"
@@ -208,9 +220,7 @@ class ClickZetta(Spark):
             ),
             exp.DistributedByProperty: lambda self, e: self.distributedbyproperty_sql(e),
             exp.EngineProperty: lambda self, e: '',
-            # exp.TimeToStr: lambda self, e: self.func(
-            #     "DATE_FORMAT_PG", e.this, str(e.args.get("format")).replace("%m", "mm")
-            # ),
+            exp.TimeToStr: time_to_str,
             exp.Pow: rename_func("POW"),
             exp.ApproxQuantile: rename_func("APPROX_PERCENTILE"),
             exp.JSONFormat: rename_func("TO_JSON"),
