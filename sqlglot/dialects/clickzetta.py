@@ -44,6 +44,8 @@ def _anonymous_func(self: ClickZetta.Generator, expression: exp.Anonymous) -> st
         return self.sql(expression.expressions[0])
     elif expression.this.upper() == 'LAST_DAY_OF_MONTH':
         return f"LAST_DAY({self.sql(expression.expressions[0])})"
+    elif expression.this.upper() == 'TO_ISO8601':
+        return f"DATE_FORMAT({self.sql(expression.expressions[0])}, 'yyyy-MM-dd\\\'T\\\'hh:mm:ss.SSSxxx')"
 
     # return as it is
     args = ", ".join(self.sql(e) for e in expression.expressions)
