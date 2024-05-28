@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 from collections import defaultdict
+from typing import List
+
 from sqlglot import exp, transforms
 from sqlglot.dialects.spark import Spark
 from sqlglot.expressions import Div
@@ -77,7 +79,7 @@ def time_to_str(self: ClickZetta.Generator, expression: exp.TimeToStr):
 class ClickZetta(Spark):
     NULL_ORDERING = "nulls_are_small"
 
-    RESERVED_KEYWORDS = {'all'}
+    RESERVED_KEYWORDS = {'all', 'user'}
 # TODO: possible keyword list
 # ALL
 # AND
