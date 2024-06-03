@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from collections import defaultdict
 from typing import List
 
@@ -11,7 +12,11 @@ from sqlglot.dialects.dialect import (
     rename_func,
     if_sql,
 )
+from sqlglot.errors import ErrorLevel, UnsupportedError, concat_messages
+
 import os
+
+logger = logging.getLogger("sqlglot")
 
 def _transform_create(expression: exp.Expression) -> exp.Expression:
     """Remove index column constraints.
@@ -434,3 +439,52 @@ class ClickZetta(Spark):
                 sql = f"{self.expressions(expression)}"
                 return sql
             return ""
+
+        def generate(self, expression: exp.Expression, copy: bool = True) -> str:
+            """
+            Generates the SQL string corresponding to the given syntax tree.
+
+            Args:
+                expression: The syntax tree.
+                copy: Whether or not to copy the expression. The generator performs mutations so
+                    it is safer to copy.
+
+            Returns:
+                The SQL string corresponding to `expression`.
+            """
+            if copy:
+                expression = expression.copy()
+
+            # Some dialects only support CTEs at the top level expression for certain expression
+            # types, so we need to bubble up nested CTEs to that level in order to produce a
+            # syntactically valid expression. This transformation happens here to minimize code
+            # duplication, since many expressions support CTEs.
+            # if (
+            #     not expression.parent
+            #     and type(expression) in self.EXPRESSIONS_WITHOUT_NESTED_CTES
+            #     and any(node.parent is not expression for node in expression.find_all(exp.With))
+            # ):
+            #     from sqlglot.transforms import move_ctes_to_top_level
+
+            #     expression = move_ctes_to_top_level(expression)
+
+            if self.ENSURE_BOOLS:
+                from sqlglot.transforms import ensure_bools
+
+                expression = ensure_bools(expression)
+
+            self.unsupported_messages = []
+            sql = self.sql(expression).strip()
+
+            if self.unsupported_level == ErrorLevel.IGNORE:
+                return sql
+
+            if self.unsupported_level == ErrorLevel.WARN:
+                for msg in self.unsupported_messages:
+                    logger.warning(msg)
+            elif self.unsupported_level == ErrorLevel.RAISE and self.unsupported_messages:
+                raise UnsupportedError(concat_messages(self.unsupported_messages, self.max_unsupported))
+
+            if self.pretty:
+                sql = sql.replace(self.SENTINEL_LINE_BREAK, "\n")
+            return sql
