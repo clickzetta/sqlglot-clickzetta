@@ -330,4 +330,4 @@ select j from a""",
 
     def test_hash_func(self):
         self.validate_all("select sum(murmur_hash3_32('test'))",
-                          write={"clickzetta": "SELECT SUM(murmurhash3_32('test'))"})
+                          write={"clickzetta": "SELECT SUM(MURMURHASH3_32('test'))"})

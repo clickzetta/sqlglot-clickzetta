@@ -1,12 +1,9 @@
 from __future__ import annotations
 
 import logging
-from collections import defaultdict
 
 from sqlglot import exp, transforms
 from sqlglot.dialects.spark import Spark
-from sqlglot.expressions import Div
-from sqlglot.helper import seq_get, csv
 from sqlglot.tokens import Tokenizer, TokenType
 from sqlglot.dialects.dialect import (
     rename_func,
@@ -86,7 +83,7 @@ def _anonymous_func(self: ClickZetta.Generator, expression: exp.Anonymous) -> st
     elif expression.this.upper() == 'GROUPING':
         return f"GROUPING_ID({self.expressions(expression, flat=True)})"
     elif expression.this.upper() == 'MURMUR_HASH3_32':
-        return f"murmurhash3_32({self.sql(expression.expressions[0])})"
+        return f"MURMURHASH3_32({self.sql(expression.expressions[0])})"
 
     # return as it is
     args = ", ".join(self.sql(e) for e in expression.expressions)
