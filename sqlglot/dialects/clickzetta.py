@@ -115,14 +115,12 @@ def unnest_to_values(self: ClickZetta.Generator, expression: exp.Unnest):
 def time_to_str(self: ClickZetta.Generator, expression: exp.TimeToStr):
     this = self.sql(expression, "this")
     if is_read_dialect('mysql'):
-        inverse_time_trie = new_trie(MySQL.INVERSE_TIME_MAPPING)
         _format = self.format_time(expression, inverse_time_mapping=MySQL.INVERSE_TIME_MAPPING,
-                                   inverse_time_trie=inverse_time_trie)
+                                   inverse_time_trie=MySQL.INVERSE_TIME_TRIE)
         return f"DATE_FORMAT_MYSQL({this}, {_format})"
     elif is_read_dialect('postgres'):
-        inverse_time_trie = new_trie(Postgres.INVERSE_TIME_MAPPING)
         _format = self.format_time(expression, inverse_time_mapping=Postgres.INVERSE_TIME_MAPPING,
-                                   inverse_time_trie=inverse_time_trie)
+                                   inverse_time_trie=Postgres.INVERSE_TIME_TRIE)
         return f"DATE_FORMAT_PG({this}, {_format})"
 
     # fallback to hive implementation
