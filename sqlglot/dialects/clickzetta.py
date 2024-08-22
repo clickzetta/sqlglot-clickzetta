@@ -3,12 +3,14 @@ from __future__ import annotations
 import logging
 
 from sqlglot import exp, transforms
-from sqlglot.dialects.spark import Spark
-from sqlglot.tokens import Tokenizer, TokenType
 from sqlglot.dialects.dialect import (
     rename_func,
-    if_sql,
- )
+    if_sql, )
+from sqlglot.dialects.mysql import MySQL
+from sqlglot.dialects.postgres import Postgres
+from sqlglot.dialects.spark import Spark
+from sqlglot.tokens import Tokenizer, TokenType
+from sqlglot.trie import new_trie
 
 logger = logging.getLogger("sqlglot")
 
@@ -112,13 +114,21 @@ def unnest_to_values(self: ClickZetta.Generator, expression: exp.Unnest):
 def time_to_str(self: ClickZetta.Generator, expression: exp.TimeToStr):
     this = self.sql(expression, "this")
     if is_read_dialect('mysql'):
-        return f"DATE_FORMAT_MYSQL({this}, {self.sql(expression, 'format')})"
+        inverse_time_mapping = {v: k for k, v in MySQL.TIME_MAPPING.items()}
+        inverse_time_trie = new_trie(MySQL.INVERSE_TIME_MAPPING)
+        _format = self.format_time(expression, inverse_time_mapping=inverse_time_mapping,
+                                   inverse_time_trie=inverse_time_trie)
+        return f"DATE_FORMAT_MYSQL({this}, {_format})"
     elif is_read_dialect('postgres'):
-        return f"DATE_FORMAT_PG({this}, {self.sql(expression, 'format')})"
+        inverse_time_mapping = {v: k for k, v in Postgres.TIME_MAPPING.items()}
+        inverse_time_trie = new_trie(Postgres.INVERSE_TIME_MAPPING)
+        _format = self.format_time(expression, inverse_time_mapping=inverse_time_mapping,
+                                   inverse_time_trie=inverse_time_trie)
+        return f"DATE_FORMAT_PG({this}, {_format})"
 
     # fallback to hive implementation
-    time_format = self.format_time(expression)
-    return f"DATE_FORMAT({this}, {time_format})"
+    _format = self.format_time(expression)
+    return f"DATE_FORMAT({this}, {_format})"
 
 def fill_tuple_with_column_name(self: ClickZetta.Generator, expression: exp.Tuple) -> str:
     if not isinstance(expression.parent, exp.Values) and not isinstance(expression.parent, exp.Group) and is_read_dialect('mysql'):
@@ -161,7 +171,7 @@ def adjust_day_of_week(self: ClickZetta.Generator, expression: exp.DayOfWeek):
         return f'DAYOFWEEK({self.sql(expression.this)})'
 
 
-def _transform_group_sql(expression: exp.Group) -> exp.Group:
+def _transform_group_sql(expression: exp.Expression) -> exp.Expression:
     # Handle CUBE
     cube = expression.args.get("cube", [])
     # If the cube list is only `true` not Column expressions, then convert to Column expressions
