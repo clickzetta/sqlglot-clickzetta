@@ -18,7 +18,6 @@ def is_read_dialect(target: str) -> bool:
     target = target.upper()
     import os
     read_dialect = os.environ.get('READ_DIALECT')
-    logger.info(f"Get the currently read_dialect: [{read_dialect}]")
     if not read_dialect:
         return False
     if target == 'MYSQL' and read_dialect.upper() in ['MYSQL', 'PRESTO', 'TRINO', 'ATHENA', 'STARROCKS', 'DORIS']:
