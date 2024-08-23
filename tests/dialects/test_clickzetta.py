@@ -139,8 +139,14 @@ select j from a""",
             read={'presto': "select s.n from tmp cross join unnest(sequence(min_date,max_date, INTERVAL '1' DAY)) s (n)"},
         )
         self.validate_all(
-            "SELECT j[2]",
+            "SELECT IF(TYPEOF(j) == 'json', (j::JSON)[2], PARSE_JSON(j::STRING)[2])",
             read={'presto': "select json_array_get(j,2)"}
+        )
+        self.validate_all(
+            "SELECT IF(TYPEOF(IF(TYPEOF(j) == 'json', (j::JSON)[1], PARSE_JSON(j::STRING)[1])) == 'json',"
+            " (IF(TYPEOF(j) == 'json', (j::JSON)[1], PARSE_JSON(j::STRING)[1])::JSON)[2],"
+            " PARSE_JSON(IF(TYPEOF(j) == 'json', (j::JSON)[1], PARSE_JSON(j::STRING)[1])::STRING)[2])",
+            read={'presto': "select json_array_get(json_array_get(j,1),2)"}
         )
         self.validate_all(
             "SELECT DATEADD(HOUR, 1, CURRENT_TIMESTAMP())",
@@ -338,7 +344,7 @@ select j from a""",
             },
         )
         self.validate_all(
-            """select category, max(live) live, max(comments) comments, rank() OVER 
+            """select category, max(live) live, max(comments) comments, rank() OVER
                     (PARTITION BY category ORDER BY comments) rank1
                     FROM VALUES ('A1', 2, 2), ('A1', 1, 1), ('A2', 3, 3), ('A1', 1, 1) tab(a, b, c)
                     GROUP BY category

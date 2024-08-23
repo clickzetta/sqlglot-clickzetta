@@ -64,7 +64,11 @@ def _anonymous_func(self: ClickZetta.Generator, expression: exp.Anonymous) -> st
     elif expression.this.upper() == 'MAP_AGG':
         return f"MAP_FROM_ENTRIES(COLLECT_LIST(STRUCT({self.expressions(expression)})))"
     elif expression.this.upper() == 'JSON_ARRAY_GET':
-        return f"{self.sql(expression.expressions[0])}[{self.sql(expression.expressions[1])}]"
+        if len(expression.expressions) != 2:
+            raise ValueError(f'JSON_ARRAY_GET needs 2 args, got {len(expression.expressions)}')
+        arg1 = self.sql(expression.expressions[0])
+        arg2 = self.sql(expression.expressions[1])
+        return f"IF(TYPEOF({arg1}) == 'json', ({arg1}::JSON)[{arg2}], PARSE_JSON({arg1}::STRING)[{arg2}])"
     elif expression.this.upper() == 'PARSE_DATETIME':
         return f"TO_TIMESTAMP({self.sql(expression.expressions[0])}, {self.sql(expression.expressions[1])})"
     elif expression.this.upper() == 'FROM_ISO8601_TIMESTAMP':
