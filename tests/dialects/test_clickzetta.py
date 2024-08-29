@@ -367,6 +367,48 @@ select j from a""",
             },
         )
 
+    def test_unnest(self):
+        self.validate_all(
+            r"""SELECT * FROM UNNEST(array['John','Jane','Jim','Jamie'], array[24,25,26,27]) AS t(name, age)""",
+            write={
+                "postgres": "SELECT * FROM UNNEST(ARRAY['John', 'Jane', 'Jim', 'Jamie'], ARRAY[24, 25, 26, 27]) AS t(name, age)",
+                "clickzetta": "SELECT * FROM UNNEST(ARRAY('John', 'Jane', 'Jim', 'Jamie'), ARRAY(24, 25, 26, 27)) AS t(name, age)",
+            },
+        )
+        # Use UNNEST to convert into multiple columns
+        # see: https://docs.starrocks.io/docs/sql-reference/sql-functions/array-functions/unnest/
+        self.validate_all(
+            r"""SELECT id, t.type, t.scores FROM example_table, unnest(split(type, ";"), scores) AS t(type,scores)""",
+            write={
+                "clickzetta": r"""SELECT id, t.type, t.scores FROM example_table LATERAL VIEW INLINE(ARRAYS_ZIP(SPLIT(type, ';'), scores)) t AS type, scores""",
+            },
+        )
+        self.validate_all(
+            r"""SELECT id, t.type, t.scores FROM example_table CROSS JOIN LATERAL unnest(split(type, ";"), scores) AS t(type,scores)""",
+            write={
+                "clickzetta": r"""SELECT id, t.type, t.scores FROM example_table LATERAL VIEW INLINE(ARRAYS_ZIP(SPLIT(type, ';'), scores)) t AS type, scores""",
+            },
+        )
+        self.validate_all(
+            'SELECT a, b, c, a1, a2 FROM example_table LATERAL VIEW INLINE(ARRAYS_ZIP(a, b, c)) t AS a, b, c',
+            read={'presto': 'SELECT a,b,c,a1,a2 FROM example_table cross join unnest(a,b,c) as t(a,b,c)'}
+        )
+
+        lateral_explode_sqls = [
+            "SELECT id, t.col FROM tbl, UNNEST(scores) AS t(col)",
+            "SELECT id, t.col FROM tbl CROSS JOIN LATERAL UNNEST(scores) AS t(col)",
+        ]
+
+        for sql in lateral_explode_sqls:
+            with self.subTest(f"Testing Starrocks roundtrip & transpilation of: {sql}"):
+                self.validate_all(
+                    sql,
+                    write={
+                        "starrocks": sql,
+                        "clickzetta": "SELECT id, t.col FROM tbl LATERAL VIEW EXPLODE(scores) t AS col",
+                    },
+                )
+
     def test_hash_func(self):
         self.validate_all("select sum(murmur_hash3_32('test'))",
                           write={"clickzetta": "SELECT SUM(MURMURHASH3_32('test'))"})

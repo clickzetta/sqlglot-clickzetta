@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import typing as t
 
 from sqlglot import exp, transforms
 from sqlglot.dialects.dialect import (
@@ -9,6 +10,7 @@ from sqlglot.dialects.dialect import (
 from sqlglot.dialects.mysql import MySQL
 from sqlglot.dialects.postgres import Postgres
 from sqlglot.dialects.spark import Spark
+from sqlglot.expressions import Func
 from sqlglot.tokens import Tokenizer, TokenType
 
 logger = logging.getLogger("sqlglot")
@@ -99,8 +101,79 @@ def nullif_to_if(self: ClickZetta.Generator, expression: exp.Nullif):
     ret = exp.If(this=cond, true=exp.Null(), false=expression.this)
     return self.sql(ret)
 
+
+def unnest_to_explode(
+    expression: exp.Expression,
+    unnest_using_arrays_zip: bool = True,
+    generator: t.Optional[ClickZetta.Generator] = None,
+) -> exp.Expression:
+    """Convert cross join unnest into lateral view explode."""
+
+    def _unnest_zip_exprs(
+        u: exp.Unnest, unnest_exprs: t.List[exp.Expression], has_multi_expr: bool
+    ) -> t.List[exp.Expression]:
+        if has_multi_expr:
+            if not unnest_using_arrays_zip:
+                if generator:
+                    generator.unsupported(
+                        f"Multiple expressions in UNNEST are not supported in "
+                        f"{generator.dialect.__module__.split('.')[-1].upper()}"
+                    )
+            else:
+                # Use INLINE(ARRAYS_ZIP(...)) for multiple expressions
+                zip_exprs: t.List[exp.Expression] = [
+                    exp.Anonymous(this="ARRAYS_ZIP", expressions=unnest_exprs)
+                ]
+                u.set("expressions", zip_exprs)
+                return zip_exprs
+        return unnest_exprs
+
+    def _udtf_type(u: exp.Unnest, has_multi_expr: bool) -> t.Type[exp.Func]:
+        if u.args.get("offset"):
+            return exp.Posexplode
+        return exp.Inline if has_multi_expr else exp.Explode
+
+    if isinstance(expression, exp.Select):
+
+        for join in expression.args.get("joins") or []:
+            join_expr = join.this
+
+            is_lateral = isinstance(join_expr, exp.Lateral)
+
+            unnest = join_expr.this if is_lateral else join_expr
+
+            if isinstance(unnest, exp.Unnest):
+                if is_lateral:
+                    alias = join_expr.args.get("alias")
+                else:
+                    alias = unnest.args.get("alias")
+                exprs = unnest.expressions
+                # The number of unnest.expressions will be changed by _unnest_zip_exprs, we need to record it here
+                has_multi_expr = len(exprs) > 1
+                exprs = _unnest_zip_exprs(unnest, exprs, has_multi_expr)
+
+                expression.args["joins"].remove(join)
+
+                alias_cols = alias.columns if alias else []
+                for e, column in zip(exprs, alias_cols):
+                    expression.append(
+                        "laterals",
+                        exp.Lateral(
+                            this=_udtf_type(unnest, has_multi_expr)(this=e),
+                            view=True,
+                            alias=exp.TableAlias(
+                                this=alias.this,  # type: ignore
+                                columns=alias_cols if unnest_using_arrays_zip else [column],  # type: ignore
+                            ),
+                        ),
+                    )
+
+    return expression
+
+
 def unnest_to_values(self: ClickZetta.Generator, expression: exp.Unnest):
-    if isinstance(expression.expressions, list) and len(expression.expressions) == 1 and isinstance(expression.expressions[0], exp.Array):
+    if isinstance(expression.expressions, list) and len(expression.expressions) == 1 and isinstance(
+            expression.expressions[0], exp.Array):
         array = expression.expressions[0].expressions
         alias = expression.args.get('alias')
         ret = exp.Values(expressions=array, alias=alias)
@@ -111,8 +184,7 @@ def unnest_to_values(self: ClickZetta.Generator, expression: exp.Unnest):
         if alias:
             ret = f"{ret} AS {self.tablealias_sql(expression.args.get('alias'))}"
         return ret
-    else:
-        return f"UNNEST({self.sql(expression.expressions)})" # TODO: don't know what to do
+    return self.unnest_sql(expression)
 
 
 def time_to_str(self: ClickZetta.Generator, expression: exp.TimeToStr):
@@ -251,6 +323,13 @@ class ClickZetta(Spark):
 
         TRANSFORMS = {
             **Spark.Generator.TRANSFORMS,
+            exp.Select: transforms.preprocess(
+                [
+                    transforms.eliminate_qualify,
+                    transforms.eliminate_distinct_on,
+                    unnest_to_explode,
+                ]
+            ),
             exp.DefaultColumnConstraint: lambda self, e: '',
             exp.OnUpdateColumnConstraint: lambda self, e: '',
             exp.AutoIncrementColumnConstraint: lambda self, e: '',
