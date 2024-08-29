@@ -389,6 +389,10 @@ select j from a""",
                 "clickzetta": r"""SELECT id, t.type, t.scores FROM example_table LATERAL VIEW INLINE(ARRAYS_ZIP(SPLIT(type, ';'), scores)) t AS type, scores""",
             },
         )
+        self.validate_all(
+            'SELECT a, b, c, a1, a2 FROM example_table LATERAL VIEW INLINE(ARRAYS_ZIP(a, b, c)) t AS a, b, c',
+            read={'presto': 'SELECT a,b,c,a1,a2 FROM example_table cross join unnest(a,b,c) as t(a,b,c)'}
+        )
 
         lateral_explode_sqls = [
             "SELECT id, t.col FROM tbl, UNNEST(scores) AS t(col)",
