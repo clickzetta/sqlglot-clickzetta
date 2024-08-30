@@ -211,8 +211,8 @@ select j from a""",
         # date_format
         os.environ['READ_DIALECT'] = 'mysql'
         self.validate_all(
-            r"SELECT DATE_FORMAT_MYSQL(CURRENT_DATE, '%x-%v')",
-            read={'presto': r"select DATE_FORMAT(CURRENT_DATE, '%x-%v')"}
+            r"SELECT DATE_FORMAT_MYSQL(CURRENT_DATE, '%x-%v %a %W')",
+            read={'presto': r"select DATE_FORMAT(CURRENT_DATE, '%x-%v %a %W')"}
         )
         self.validate_all(
             "SELECT CAST(DATE_FORMAT_MYSQL(TIMESTAMP('2024-08-22 14:53:12'), '%Y-%m-%d') AS DATE)",
