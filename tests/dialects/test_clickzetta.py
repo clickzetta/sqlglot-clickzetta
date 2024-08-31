@@ -25,7 +25,7 @@ class TestClickzetta(Validator):
         self.validate_all(
             "select json_extract(to, '$.billing_zone') as to_billing_zone",
             write={
-                "clickzetta": "SELECT GET_JSON_OBJECT(`to`, '$.billing_zone') AS to_billing_zone",
+                "clickzetta": "SELECT JSON_EXTRACT(`to`, '$.billing_zone') AS to_billing_zone",
               },
         )
 
@@ -101,12 +101,6 @@ class TestClickzetta(Validator):
             }
         )
         self.validate_all(
-            "select * from unnest(array[('a',1),('b',2),('c',3)]) as t(s,i)",
-            write={
-                "clickzetta": "SELECT * FROM VALUES ('a', 1), ('b', 2), ('c', 3) AS t(s, i)",
-            }
-        )
-        self.validate_all(
             "select json_format(json '{\"a\":1,\"b\":2}')",
             write={
                 "clickzetta": "SELECT TO_JSON(JSON '{\"a\":1,\"b\":2}')",
@@ -135,10 +129,6 @@ select j from a""",
             read={'presto': "select sequence(min_date,max_date,interval '1' day)"}
         )
         self.validate_all(
-            "SELECT s.n FROM tmp LATERAL VIEW EXPLODE(SEQUENCE(min_date, max_date, INTERVAL '1' DAY)) s AS n",
-            read={'presto': "select s.n from tmp cross join unnest(sequence(min_date,max_date, INTERVAL '1' DAY)) s (n)"},
-        )
-        self.validate_all(
             "SELECT IF(TYPEOF(j) == 'json', (j::JSON)[2], PARSE_JSON(j::STRING)[2])",
             read={'presto': "select json_array_get(j,2)"}
         )
@@ -148,17 +138,32 @@ select j from a""",
             " PARSE_JSON(IF(TYPEOF(j) == 'json', (j::JSON)[1], PARSE_JSON(j::STRING)[1])::STRING)[2])",
             read={'presto': "select json_array_get(json_array_get(j,1),2)"}
         )
+        self.validate_identity("""SELECT CAST(JSON_EXTRACT(PARSE_JSON('{"a": 1}'), '$.a') AS STRING)""",
+            """SELECT CAST(JSON_EXTRACT(JSON '{"a": 1}', '$.a') AS STRING)""",
+        )
+        self.validate_all(
+            """SELECT CAST(PARSE_JSON(fieldvalue)['00000000-0000-0000-0000-00000000'] AS STRING) AS `编号` FROM VALUES ('{"00000000-0000-0000-0000-00000000":"编号01"}') AS t(fieldvalue)""",
+            read={'starrocks': """select cast(parse_json(fieldvalue) -> '00000000-0000-0000-0000-00000000' as varchar ) as `编号` from values('{"00000000-0000-0000-0000-00000000":"编号01"}') as t(fieldvalue)"""}
+        )
+        self.validate_all(
+            """SELECT CAST(JSON_EXTRACT(JSON '{"a": 1}', '$.a') AS STRING)""",
+            read={'starrocks': """select cast(parse_json('{"a": 1}') -> 'a' as varchar)"""}
+        )
+        self.validate_all(
+            "SELECT CEIL(5123.123, 1)",
+            read={'starrocks': "SELECT ceiling(5123.123, 1)"}
+        )
+        self.validate_all(
+            "SELECT CHAR(CAST('1' + 65 AS INT))",
+            read={'starrocks': """select char("1" + 65)"""}
+        )
+        self.validate_all(
+            "SELECT COLLECT_LIST(pv) FROM VALUES (33), (334), (3), (6), (2) AS t(pv)",
+            read={'starrocks': "select array_agg(pv) from values(33),(334),(3),(6),(2) as t(pv)"}
+        )
         self.validate_all(
             "SELECT DATEADD(HOUR, 1, CURRENT_TIMESTAMP())",
             read={'presto': "select date_add('hour', 1, now())"}
-        )
-        self.validate_all(
-            "SELECT i FROM EXPLODE(SEQUENCE(-3, 0)) AS t(i)",
-            read={'presto': "select i from unnest(sequence(-3,0)) as t(i)"}
-        )
-        self.validate_all(
-            "SELECT * FROM EXPLODE(SEQUENCE(-3, 0))",
-            read={'presto': "select * from unnest(sequence(-3,0))"}
         )
         self.validate_all(
             "SELECT TO_TIMESTAMP(a, 'yyyy-MM-dd\\\'T\\\'HH:mm:ss\\\'Z\\\'')",
@@ -290,6 +295,18 @@ select j from a""",
             r"SELECT RLIKE('1a 2b 14m', '\\d+b')",
             read={'presto': "SELECT regexp_like('1a 2b 14m', '\d+b')"}
         )
+        self.validate_all(
+            r"SELECT RLIKE('1a 2b 14m', '(\\d+)([ab]) ')",
+            read={'presto': "SELECT regexp_like('1a 2b 14m', '(\d+)([ab]) ');"}
+        )
+        self.validate_all(
+            r"SELECT RLIKE('new york', '(\\w)(\\w*)')",
+            read={'presto': "SELECT regexp_like('new york', '(\w)(\w*)')"}
+        )
+        self.validate_all(
+            r"SELECT RLIKE('1a 2b 14m', '\\s*[a-z]+\\s*')",
+            read={'presto': "SELECT regexp_like('1a 2b 14m', '\s*[a-z]+\s*')"}
+        )
 
         # day_of_week
         os.environ['READ_DIALECT'] = 'presto'
@@ -301,79 +318,99 @@ select j from a""",
         os.environ.pop('READ_DIALECT')
 
     def test_group_sql_expression(self):
+        self.validate_identity(
+            "SELECT a, AVG(b), AVG(c), COUNT(*) FROM VALUES ('A1', 2, 2) AS tab(a, b, c) GROUP BY a, b WITH ROLLUP",
+            "SELECT a, AVG(b), AVG(c), COUNT(*) FROM VALUES ('A1', 2, 2) AS tab(a, b, c) GROUP BY ROLLUP (a, b)",
+        )
+        sql = "SELECT a, AVG(b), AVG(c), COUNT(*) FROM VALUES ('A1', 2, 2), ('A1', 1, 1)" + \
+              " AS tab(a, b, c) GROUP BY CUBE (a, b)"
         self.validate_all(
-            "SELECT a, AVG(b), AVG(c), COUNT(*) FROM VALUES ('A1', 2, 2), ('A1', 1, 1), ('A2', 3, 3), ('A1', 1, 1) "
-            "tab(a, b, c) GROUP BY a",
-            write={
-                "clickzetta": "SELECT a, AVG(b), AVG(c), COUNT(*) FROM VALUES ('A1', 2, 2), ('A1', 1, 1), ('A2', 3, 3),"
-                              " ('A1', 1, 1) AS tab(a, b, c) GROUP BY a",
+            sql,
+            read={
+                'hive': "SELECT a, AVG(b), AVG(c), COUNT(*) FROM VALUES ('A1', 2, 2), ('A1', 1, 1) " + \
+                        "tab(a, b, c) GROUP BY a, b WITH CUBE",
+                'clickzetta': sql
             },
         )
+        sql = "SELECT a, b, AVG(c), COUNT(*) FROM VALUES ('A1', 2, 2), ('A1', 1, 1), ('A2', 3, 3)" + \
+              " AS tab(a, b, c) GROUP BY CUBE (a, b)"
         self.validate_all(
-            "SELECT a, AVG(b), AVG(c), COUNT(*) FROM VALUES ('A1', 2, 2), ('A1', 1, 1), ('A2', 3, 3), ('A1', 1, 1) "
-            "tab(a, b, c) GROUP BY a, b WITH CUBE",
-            write={
-                "clickzetta": "SELECT a, AVG(b), AVG(c), COUNT(*) FROM VALUES ('A1', 2, 2), ('A1', 1, 1), ('A2', 3, 3),"
-                              " ('A1', 1, 1) AS tab(a, b, c) GROUP BY CUBE (a, b)",
-            },
-        )
-        self.validate_all(
-            "SELECT a, AVG(b), AVG(c), COUNT(*) FROM VALUES ('A1', 2, 2), ('A1', 1, 1), ('A2', 3, 3), ('A1', 1, 1) "
-            "tab(a, b, c) GROUP BY a, b WITH rollup",
-            write={
-                "clickzetta": "SELECT a, AVG(b), AVG(c), COUNT(*) FROM VALUES ('A1', 2, 2), ('A1', 1, 1), ('A2', 3, 3),"
-                              " ('A1', 1, 1) AS tab(a, b, c) GROUP BY ROLLUP (a, b)",
-            },
-        )
-        self.validate_all(
-            """SELECT a, b, AVG(c), COUNT(*)
-                        FROM VALUES ('A1', 2, 2), ('A1', 1, 1), ('A2', 3, 3), ('A1', 1, 1) tab(a, b, c)
+            sql,
+            read={
+                'hive': """SELECT a, b, AVG(c), COUNT(*)
+                        FROM VALUES ('A1', 2, 2), ('A1', 1, 1), ('A2', 3, 3) tab(a, b, c)
                     GROUP BY CUBE (a, b)""",
-            write={
-                "clickzetta": "SELECT a, b, AVG(c), COUNT(*) FROM VALUES ('A1', 2, 2), ('A1', 1, 1), ('A2', 3, 3), "
-                              "('A1', 1, 1) AS tab(a, b, c) GROUP BY CUBE (a, b)",
+                'clickzetta': sql
             },
         )
+
+
+
+
+        sql = "SELECT a, AVG(b), AVG(c), COUNT(*) FROM VALUES ('A1', 2, 2), ('A1', 1, 1), ('A2', 3, 3)," + \
+              " ('A1', 1, 1) AS tab(a, b, c) GROUP BY ROLLUP (a, b)"
         self.validate_all(
-            """SELECT a, b, count(*)
-                    FROM VALUES ('A1', 2, 2), ('A1', 1, 1), ('A2', 3, 3), ('A1', 1, 1) tab(a, b, c)
-                    group by a, b with cube order by a, b LIMIT 10""",
-            write={
-                "clickzetta": "SELECT a, b, COUNT(*) FROM VALUES ('A1', 2, 2), ('A1', 1, 1), ('A2', 3, 3), ('A1', 1, 1)"
-                              " AS tab(a, b, c) GROUP BY CUBE (a, b) ORDER BY a, b LIMIT 10",
+            sql,
+            read={
+                'hive': "SELECT a, AVG(b), AVG(c), COUNT(*) FROM VALUES ('A1', 2, 2), ('A1', 1, 1), ('A2', 3, 3), ('A1', 1, 1)" + \
+                        " AS tab(a, b, c) GROUP BY a, b WITH ROLLUP",
+                'clickzetta': sql
             },
         )
+
+        sql = "SELECT a, SUM(c) FROM (SELECT 'A1' AS a, 1 AS b, 1 AS c UNION SELECT 'A2' AS a, 2 AS b, 2 AS c) AS tab GROUP BY GROUPING SETS ((), (a))"
         self.validate_all(
-            """select category, max(live) live, max(comments) comments, rank() OVER
-                    (PARTITION BY category ORDER BY comments) rank1
-                    FROM VALUES ('A1', 2, 2), ('A1', 1, 1), ('A2', 3, 3), ('A1', 1, 1) tab(a, b, c)
-                    GROUP BY category
-                    GROUPING SETS ((), (category))
-                    HAVING max(comments) > 0""",
-            write={
-                "clickzetta": "SELECT category, MAX(live) AS live, MAX(comments) AS comments, rank() OVER "
-                              "(PARTITION BY category ORDER BY comments) AS rank1 FROM VALUES "
-                              "('A1', 2, 2), ('A1', 1, 1), ('A2', 3, 3), ('A1', 1, 1) AS tab(a, b, c) "
-                              "GROUP BY GROUPING SETS ((), (category)) HAVING MAX(comments) > 0",
+            sql,
+            read={
+                'hive': """SELECT a, sum(c) FROM (select 'A1' as a, 1 as b, 1 as c union select 'A2' as a, 2 as b, 2 as c) tab GROUP BY a GROUPING SETS ((), (a))""",
+                'clickzetta': sql
             },
         )
+        sql = "SELECT a, b, COUNT(*) FROM VALUES ('A1', 2, 2), ('A1', 1, 1), ('A2', 3, 3), ('A1', 1, 1)" + \
+              " AS tab(a, b, c) GROUP BY CUBE (c), ROLLUP (a, b) ORDER BY a, b LIMIT 10"
         self.validate_all(
-            """SELECT a, b, count(*)
+            sql,
+            read={
+                'hive': """SELECT a, b, count(*)
                     FROM VALUES ('A1', 2, 2), ('A1', 1, 1), ('A2', 3, 3), ('A1', 1, 1) tab(a, b, c)
                     group by rollup(a,b), cube(c) order by a, b LIMIT 10""",
-            write={
-                "clickzetta": "SELECT a, b, COUNT(*) FROM VALUES ('A1', 2, 2), ('A1', 1, 1), ('A2', 3, 3), ('A1', 1, 1)"
-                              " AS tab(a, b, c) GROUP BY CUBE (c), ROLLUP (a, b) ORDER BY a, b LIMIT 10",
+                'clickzetta': sql
             },
         )
 
     def test_unnest(self):
+        # From unnest
+        # Using a single map column:
+        # https://prestodb.io/docs/current/sql/select.html#unnest
         self.validate_all(
-            r"""SELECT * FROM UNNEST(array['John','Jane','Jim','Jamie'], array[24,25,26,27]) AS t(name, age)""",
+            "SELECT * FROM VALUES ('a', 1), ('b', 2), ('c', 3) AS t(s, i)",
+            read={
+                'presto': "select * from unnest(array[('a',1),('b',2),('c',3)]) as t(s,i)"},
+        )
+        self.validate_all(
+            "SELECT i FROM EXPLODE(SEQUENCE(-3, 0)) AS t(i)",
+            read={'presto': "select i from unnest(sequence(-3,0)) as t(i)"}
+        )
+        self.validate_all(
+            "SELECT * FROM EXPLODE(SEQUENCE(-3, 0))",
+            read={'presto': "select * from unnest(sequence(-3,0))"}
+        )
+        self.validate_all(
+            r"""SELECT * FROM UNNEST(array('John','Jane','Jim','Jamie'), array(24,25,26,27)) AS t(name, age)""",
             write={
                 "postgres": "SELECT * FROM UNNEST(ARRAY['John', 'Jane', 'Jim', 'Jamie'], ARRAY[24, 25, 26, 27]) AS t(name, age)",
                 "clickzetta": "SELECT * FROM UNNEST(ARRAY('John', 'Jane', 'Jim', 'Jamie'), ARRAY(24, 25, 26, 27)) AS t(name, age)",
             },
+        )
+        # Join with unnest
+        self.validate_all(
+            "SELECT s.n FROM tmp LATERAL VIEW EXPLODE(SEQUENCE(min_date, max_date, INTERVAL '1' DAY)) s AS n",
+            read={
+                'presto': "select s.n from tmp cross join unnest(sequence(min_date,max_date, INTERVAL '1' DAY)) s (n)"},
+        )
+        self.validate_all(
+            'SELECT student, score FROM tests LATERAL VIEW EXPLODE(scores) t AS score',
+            read={'presto': 'SELECT student, score FROM tests CROSS JOIN UNNEST(scores) AS t (score)'}
         )
         # Use UNNEST to convert into multiple columns
         # see: https://docs.starrocks.io/docs/sql-reference/sql-functions/array-functions/unnest/

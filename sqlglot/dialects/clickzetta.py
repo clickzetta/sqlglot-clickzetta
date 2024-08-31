@@ -4,10 +4,10 @@ import logging
 import typing as t
 
 from sqlglot import exp, transforms
+from sqlglot.dialects import MySQL
 from sqlglot.dialects.dialect import (
     rename_func,
     if_sql, )
-from sqlglot.dialects.mysql import MySQL
 from sqlglot.dialects.postgres import Postgres
 from sqlglot.dialects.spark import Spark
 from sqlglot.tokens import Tokenizer, TokenType
@@ -183,7 +183,9 @@ def unnest_to_values(self: ClickZetta.Generator, expression: exp.Unnest):
         if alias:
             ret = f"{ret} AS {self.tablealias_sql(expression.args.get('alias'))}"
         return ret
-    return self.unnest_sql(expression)
+    # Not set dialect, will call unnest_sql in generator.Generator to ensure that it will not be affected
+    # by upstream changes
+    return expression.sql()
 
 
 def time_to_str(self: ClickZetta.Generator, expression: exp.TimeToStr):
@@ -201,8 +203,10 @@ def time_to_str(self: ClickZetta.Generator, expression: exp.TimeToStr):
     _format = self.format_time(expression)
     return f"DATE_FORMAT({this}, {_format})"
 
+
 def fill_tuple_with_column_name(self: ClickZetta.Generator, expression: exp.Tuple) -> str:
-    if not isinstance(expression.parent, exp.Values) and not isinstance(expression.parent, exp.Group) and is_read_dialect('mysql'):
+    if (not isinstance(expression.parent, exp.Values) and not isinstance(expression.parent.parent, exp.Group)
+            and is_read_dialect('mysql')):
         elements = []
         for i, e in enumerate(expression.expressions):
             elements.append(f'{self.sql(e)} AS __c{i+1}')
@@ -245,30 +249,55 @@ def adjust_day_of_week(self: ClickZetta.Generator, expression: exp.DayOfWeek):
 def _transform_group_sql(expression: exp.Expression) -> exp.Expression:
     # Handle CUBE
     cube = expression.args.get("cube", [])
-    # If the cube list is only `true` not Column expressions, then convert to Column expressions
-    if cube and cube[0] is True:
-        return exp.Group(
-            cube=expression.expressions,
-            expressions=[]
-        )
+    group_exprs = expression.expressions
+    # If the cube list is only "true" not Column expressions, then convert to Column expressions
+    if cube and isinstance(cube[0], exp.Cube):
+        exprs = cube[0].expressions
+        if not exprs:
+            cube[0].set("expressions", group_exprs)
+            return exp.Group(
+                cube=cube,
+                expressions=[]
+            )
 
     # Handle ROLLUP
     rollup = expression.args.get("rollup", [])
-    if rollup and rollup[0] is True:
-        return exp.Group(
-            rollup=expression.expressions,
-            expressions=[]
-        )
+    if rollup and isinstance(rollup[0], exp.Rollup):
+        exprs = rollup[0].expressions
+        if not exprs:
+            rollup[0].set("expressions", group_exprs)
+            return exp.Group(
+                cube=rollup,
+                expressions=[]
+            )
 
     # Handle GROUPING SETS
-    if expression.args.get("grouping_sets") and expression.expressions:
+    grouping = expression.args.get("grouping_sets", [])
+    if grouping and isinstance(grouping[0], exp.GroupingSets):
         return exp.Group(
-            grouping_sets=expression.args.get("grouping_sets"),
+            grouping_sets=grouping,
             expressions=[]
         )
 
     # If no special clauses, return the original expression
     return expression
+
+
+def _json_extract(name: str, self: ClickZetta.Generator, e: exp.JSONExtract) -> str:
+    path = e.expression
+    if isinstance(path, exp.Literal) and isinstance(path.this, str):
+        # If the literal starts with $., use JSON_EXTRACT directly
+        if path.this.startswith('$.'):
+            return self.func(name, e.this, f"'{path.this}'", *e.expressions)
+        return f"{e.this}['{e.expression.this}']"
+    else:
+        return self.func(name, e.this, self.sql(path), *e.expressions)
+
+
+def _parse_json(self, e):
+    if isinstance(e.this, exp.Literal) and e.this.is_string:
+        return f"JSON '{e.this.this}'"
+    return self.func("PARSE_JSON", e.this)
 
 
 class ClickZetta(Spark):
@@ -350,7 +379,7 @@ class ClickZetta(Spark):
             exp.Pow: rename_func("POW"),
             exp.ApproxQuantile: rename_func("APPROX_PERCENTILE"),
             exp.JSONFormat: rename_func("TO_JSON"),
-            exp.ParseJSON: lambda self, e: f"JSON {self.sql(e.this)}",
+            exp.ParseJSON: _parse_json,
             exp.Nullif: nullif_to_if,
             exp.If: if_sql(false_value=exp.Null()),
             exp.Unnest: unnest_to_values,
@@ -362,6 +391,10 @@ class ClickZetta(Spark):
             exp.DayOfWeek: adjust_day_of_week,
             exp.Group: transforms.preprocess([_transform_group_sql]),
             exp.RegexpLike: rename_func("RLIKE"),
+            exp.JSONExtract: lambda self, e: _json_extract("JSON_EXTRACT", self, e),
+            exp.Chr: lambda self, e: f"CHAR({self.sql(exp.cast(e.this, exp.DataType.Type.INT))})",
+            exp.ArrayAgg: rename_func("COLLECT_LIST"),
+            exp.FromISO8601Timestamp: lambda self, e: f"{self.sql(exp.cast(e.this, exp.DataType.Type.TIMESTAMP))}",
         }
 
         # def distributedbyproperty_sql(self, expression: exp.DistributedByProperty) -> str:
