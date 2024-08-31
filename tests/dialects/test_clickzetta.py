@@ -220,8 +220,8 @@ select j from a""",
             read={'presto': r"select DATE_FORMAT(CURRENT_DATE, '%x-%v %a %W')"}
         )
         self.validate_all(
-            "SELECT CAST(DATE_FORMAT_MYSQL(TIMESTAMP('2024-08-22 14:53:12'), '%Y-%m-%d') AS DATE)",
-            read={'presto': r"""SELECT CAST(date_format(timestamp('2024-08-22 14:53:12'), '%Y-%m-%d') AS DATE);"""}
+            "SELECT CAST(DATE_FORMAT_MYSQL(CAST('2024-08-22 14:53:12' AS TIMESTAMP), '%Y-%m-%d') AS DATE)",
+            read={'presto': r"""SELECT CAST(date_format(cast('2024-08-22 14:53:12' as TIMESTAMP), '%Y-%m-%d') AS DATE)"""}
         )
         self.validate_all(
             "SELECT TIMESTAMP('2024-08-22 14:53:12'), DATE_FORMAT_MYSQL(TIMESTAMP('2024-08-22 "

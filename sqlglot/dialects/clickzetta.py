@@ -4,7 +4,7 @@ import logging
 import typing as t
 
 from sqlglot import exp, transforms
-from sqlglot.dialects import MySQL
+from sqlglot.dialects.mysql import MySQL
 from sqlglot.dialects.dialect import (
     rename_func,
     if_sql, )
