@@ -336,7 +336,13 @@ class Expression(metaclass=_Expression):
             value.index = len(values)
         values.append(value)
 
-    def set(self, arg_key: str, value: t.Any, index: t.Optional[int] = None) -> None:
+    def set(
+        self,
+        arg_key: str,
+        value: t.Any,
+        index: t.Optional[int] = None,
+        overwrite: bool = True,
+    ) -> None:
         """
         Sets arg_key to value.
 
@@ -344,6 +350,8 @@ class Expression(metaclass=_Expression):
             arg_key: name of the expression arg.
             value: value to set the arg to.
             index: if the arg is a list, this specifies what position to add the value in it.
+            overwrite: assuming an index is given, this determines whether to overwrite the
+                list entry instead of only inserting a new value (i.e., like list.insert).
         """
         if index is not None:
             expressions = self.args.get(arg_key) or []
@@ -359,8 +367,10 @@ class Expression(metaclass=_Expression):
             if isinstance(value, list):
                 expressions.pop(index)
                 expressions[index:index] = value
-            else:
+            elif overwrite:
                 expressions[index] = value
+            else:
+                expressions.insert(index, value)
 
             value = expressions
         elif value is None:
@@ -1195,6 +1205,7 @@ class Query(Expression):
         alias: ExpOrStr,
         as_: ExpOrStr,
         recursive: t.Optional[bool] = None,
+        materialized: t.Optional[bool] = None,
         append: bool = True,
         dialect: DialectType = None,
         copy: bool = True,
@@ -1213,6 +1224,7 @@ class Query(Expression):
             as_: the SQL code string to parse as the table expression.
                 If an `Expression` instance is passed, it will be used as-is.
             recursive: set the RECURSIVE part of the expression. Defaults to `False`.
+            materialized: set the MATERIALIZED part of the expression.
             append: if `True`, add to any existing expressions.
                 Otherwise, this resets the expressions.
             dialect: the dialect used to parse the input expression.
@@ -1223,7 +1235,15 @@ class Query(Expression):
             The modified expression.
         """
         return _apply_cte_builder(
-            self, alias, as_, recursive=recursive, append=append, dialect=dialect, copy=copy, **opts
+            self,
+            alias,
+            as_,
+            recursive=recursive,
+            materialized=materialized,
+            append=append,
+            dialect=dialect,
+            copy=copy,
+            **opts,
         )
 
     def union(
@@ -1778,7 +1798,7 @@ class CommentColumnConstraint(ColumnConstraintKind):
 
 
 class CompressColumnConstraint(ColumnConstraintKind):
-    pass
+    arg_types = {"this": False}
 
 
 class DateFormatColumnConstraint(ColumnConstraintKind):
@@ -2005,6 +2025,7 @@ class Drop(Expression):
         "constraints": False,
         "purge": False,
         "cluster": False,
+        "concurrently": False,
     }
 
     @property
@@ -2180,6 +2201,7 @@ class Insert(DDL, DML):
         alias: ExpOrStr,
         as_: ExpOrStr,
         recursive: t.Optional[bool] = None,
+        materialized: t.Optional[bool] = None,
         append: bool = True,
         dialect: DialectType = None,
         copy: bool = True,
@@ -2198,6 +2220,7 @@ class Insert(DDL, DML):
             as_: the SQL code string to parse as the table expression.
                 If an `Expression` instance is passed, it will be used as-is.
             recursive: set the RECURSIVE part of the expression. Defaults to `False`.
+            materialized: set the MATERIALIZED part of the expression.
             append: if `True`, add to any existing expressions.
                 Otherwise, this resets the expressions.
             dialect: the dialect used to parse the input expression.
@@ -2208,7 +2231,15 @@ class Insert(DDL, DML):
             The modified expression.
         """
         return _apply_cte_builder(
-            self, alias, as_, recursive=recursive, append=append, dialect=dialect, copy=copy, **opts
+            self,
+            alias,
+            as_,
+            recursive=recursive,
+            materialized=materialized,
+            append=append,
+            dialect=dialect,
+            copy=copy,
+            **opts,
         )
 
 
@@ -2228,6 +2259,10 @@ class OnConflict(Expression):
         "conflict_keys": False,
         "constraint": False,
     }
+
+
+class OnCondition(Expression):
+    arg_types = {"error": False, "empty": False, "null": False}
 
 
 class Returning(Expression):
@@ -2603,8 +2638,18 @@ class DistKeyProperty(Property):
     arg_types = {"this": True}
 
 
+# https://docs.starrocks.io/docs/sql-reference/sql-statements/data-definition/CREATE_TABLE/#distribution_desc
+# https://doris.apache.org/docs/sql-manual/sql-statements/Data-Definition-Statements/Create/CREATE-TABLE?_highlight=create&_highlight=table#distribution_desc
+class DistributedByProperty(Property):
+    arg_types = {"expressions": False, "kind": True, "buckets": False, "order": False}
+
+
 class DistStyleProperty(Property):
     arg_types = {"this": True}
+
+
+class DuplicateKeyProperty(Property):
+    arg_types = {"expressions": True}
 
 
 class EngineProperty(Property):
@@ -2937,6 +2982,7 @@ class Properties(Expression):
         "COMMENT": SchemaCommentProperty,
         "DEFINER": DefinerProperty,
         "DISTKEY": DistKeyProperty,
+        "DISTRIBUTED_BY": DistributedByProperty,
         "DISTSTYLE": DistStyleProperty,
         "ENGINE": EngineProperty,
         "EXECUTE AS": ExecuteAsProperty,
@@ -4030,6 +4076,9 @@ class DataType(Expression):
         DATETIME = auto()
         DATETIME64 = auto()
         DECIMAL = auto()
+        DECIMAL32 = auto()
+        DECIMAL64 = auto()
+        DECIMAL128 = auto()
         DOUBLE = auto()
         ENUM = auto()
         ENUM8 = auto()
@@ -4175,6 +4224,9 @@ class DataType(Expression):
         *FLOAT_TYPES,
         Type.BIGDECIMAL,
         Type.DECIMAL,
+        Type.DECIMAL32,
+        Type.DECIMAL64,
+        Type.DECIMAL128,
         Type.MONEY,
         Type.SMALLMONEY,
         Type.UDECIMAL,
@@ -4926,7 +4978,7 @@ class ExplodingGenerateSeries(GenerateSeries):
 
 
 class ArrayAgg(AggFunc):
-    pass
+    arg_types = {"this": True, "nulls_excluded": False}
 
 
 class ArrayUniqueAgg(AggFunc):
@@ -5228,6 +5280,12 @@ class DatetimeTrunc(Func, TimeUnit):
 
 class DayOfWeek(Func):
     _sql_names = ["DAY_OF_WEEK", "DAYOFWEEK"]
+
+
+# https://duckdb.org/docs/sql/functions/datepart.html#part-specifiers-only-usable-as-date-part-specifiers
+# ISO day of week function in duckdb is ISODOW
+class DayOfWeekIso(Func):
+    _sql_names = ["DAYOFWEEK_ISO", "ISODOW"]
 
 
 class DayOfMonth(Func):
@@ -5579,6 +5637,10 @@ class JSONArrayAgg(Func):
     }
 
 
+class JSONExists(Func):
+    arg_types = {"this": True, "path": True, "passing": False, "on_condition": False}
+
+
 # https://docs.oracle.com/en/database/oracle/oracle-database/19/sqlrf/JSON_TABLE.html
 # Note: parsing of JSON column definitions is currently incomplete.
 class JSONColumnDef(Expression):
@@ -5595,8 +5657,7 @@ class JSONValue(Expression):
         "this": True,
         "path": True,
         "returning": False,
-        "on_empty": False,
-        "on_error": False,
+        "on_condition": False,
     }
 
 
@@ -5815,6 +5876,10 @@ class AddMonths(Func):
 
 class Nvl2(Func):
     arg_types = {"this": True, "true": True, "false": False}
+
+
+class Normalize(Func):
+    arg_types = {"this": True, "form": False}
 
 
 # https://cloud.google.com/bigquery/docs/reference/standard-sql/bigqueryml-syntax-predict#mlpredict_function
@@ -6501,6 +6566,7 @@ def _apply_cte_builder(
     alias: ExpOrStr,
     as_: ExpOrStr,
     recursive: t.Optional[bool] = None,
+    materialized: t.Optional[bool] = None,
     append: bool = True,
     dialect: DialectType = None,
     copy: bool = True,
@@ -6508,7 +6574,7 @@ def _apply_cte_builder(
 ) -> E:
     alias_expression = maybe_parse(alias, dialect=dialect, into=TableAlias, **opts)
     as_expression = maybe_parse(as_, dialect=dialect, **opts)
-    cte = CTE(this=as_expression, alias=alias_expression)
+    cte = CTE(this=as_expression, alias=alias_expression, materialized=materialized)
     return _apply_child_list_builder(
         cte,
         instance=instance,
