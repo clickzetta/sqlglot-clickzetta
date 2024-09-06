@@ -304,11 +304,6 @@ select j from a""",
             read={'presto': "select now() at time zone 'UTC'"}
         )
         self.validate_all(
-            "SELECT 'Asia/Shanghai'",
-            read={'presto': "select current_timezone()"}
-        )
-        # TODO temporary workaround for presto 'select current_timezone()'
-        self.validate_all(
             "SELECT DAYOFWEEK(TO_DATE(d))",
             read={'spark': "select dayofweek(d)"}
         )

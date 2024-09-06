@@ -70,9 +70,6 @@ def _anonymous_func(self: ClickZetta.Generator, expression: exp.Anonymous) -> st
         return f"DAYOFYEAR({self.sql(expression.expressions[0])})"
     elif expression.this.upper() == 'YOW' or expression.this.upper() == 'YEAR_OF_WEEK':
         return f"YEAROFWEEK({self.sql(expression.expressions[0])})"
-    # TODO: temporary workaround for presto 'select current_timezone()'
-    elif expression.this.upper() == 'CURRENT_TIMEZONE':
-        return f"'Asia/Shanghai'"
     elif expression.this.upper() == 'GROUPING':
         return f"GROUPING_ID({self.expressions(expression, flat=True)})"
     elif expression.this.upper() == 'MURMUR_HASH3_32':
