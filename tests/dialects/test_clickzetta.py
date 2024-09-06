@@ -28,33 +28,104 @@ class TestClickzetta(Validator):
                 "clickzetta": "SELECT JSON_EXTRACT(`to`, '$.billing_zone') AS to_billing_zone",
               },
         )
+        self.validate_all(
+            "select json_extract(to, '$.billing_zone') as to_billing_zone",
+            write={
+                "clickzetta": "SELECT JSON_EXTRACT(`to`, '$.billing_zone') AS to_billing_zone",
+              },
+        )
 
     def test_ddl_types(self):
+        starrocks_ddl_sqls = [
+            ("DISTRIBUTED BY HASH (col1) BUCKETS 1", "CLUSTERED BY (col1) INTO 1 BUCKETS"),
+            ("DISTRIBUTED BY HASH (col1) BUCKETS 1 ORDER BY (col1)", "CLUSTERED BY (col1) SORTED BY (col1) INTO 1 BUCKETS"),
+            ("DISTRIBUTED BY HASH (col1) BUCKETS 1 PROPERTIES ('replication_num'='1')",
+             "CLUSTERED BY (col1) INTO 1 BUCKETS PROPERTIES ('replication_num'='1')"),
+            ("DUPLICATE KEY (col1, col2) DISTRIBUTED BY HASH (col1) BUCKETS 1", "CLUSTERED BY (col1) INTO 1 BUCKETS"),
+            ("PARTITION BY (col1)", "PARTITIONED BY (col1)"),
+        ]
+
+        for prep in starrocks_ddl_sqls:
+            with self.subTest(f"Testing create scheme: {prep}"):
+                self.validate_all(f"CREATE TABLE foo (col1 BIGINT, col2 BIGINT) {prep[1]}",
+                                  read={"starrocks": f"CREATE TABLE foo (col1 BIGINT, col2 BIGINT) {prep[0]}"})
+
+        # Test the different wider DECIMAL types
         self.validate_all(
-            'CREATE TABLE foo (a INT)',
-            read={'postgres': 'create table foo (a serial)'}
+            "CREATE TABLE foo (col0 DECIMAL(9, 1), col1 DECIMAL(9, 1), col2 DECIMAL(18, 10), col3 DECIMAL(38, 10)) CLUSTERED BY (col1) INTO 1 BUCKETS",
+            read={
+                "starrocks": "CREATE TABLE foo (col0 DECIMAL(9, 1), col1 DECIMAL32(9, 1), col2 DECIMAL64(18, 10), col3 DECIMAL128(38, 10)) DISTRIBUTED BY HASH (col1) BUCKETS 1"}
         )
+        types = [("SERIAL", "INT"), ("BIGSERIAL", "BIGINT"), ("ENUM", "STRING"), ("INT DEFAULT 0", "INT"),]
+        for type in types:
+            with self.subTest(f"Testing covert postgres type: {type}"):
+                self.validate_all(
+                    f"CREATE TABLE foo (a {type[1]})",
+                    read={
+                        "postgres": f"CREATE TABLE foo (a {type[0]})",
+                    },
+                )
+
+        # Test the mysql type
+        types = [("DECIMAL UNSIGNED", "DECIMAL"), ("LONGTEXT", "STRING")]
+        for type in types:
+            with self.subTest(f"Testing covert mysql type: {type}"):
+                self.validate_all(
+                    f"CREATE TABLE foo (a {type[1]})",
+                    read={
+                        "mysql": f"CREATE TABLE foo (a {type[0]})",
+                    },
+                )
+
+        # Test the starrocks type
+        types = [("INT(11)", "INT"), ("INT(11) NOT NULL", "INT NOT NULL"),
+                 ("SMALLINT(8)", "SMALLINT"), ("BIGINT(20)", "BIGINT"), ("datetime", "TIMESTAMP"),
+                 ("FLOAT(10, 2)", "FLOAT"), ("DOUBLE(10, 2)", "DOUBLE"),("DECIMAL(10, 2)", "DECIMAL(10, 2)"),
+                 ("DECIMAL32(9, 1)", "DECIMAL(9, 1)"),("DECIMAL64(18, 10)", "DECIMAL(18, 10)"),
+                 ("DECIMAL128(38, 10)", "DECIMAL(38, 10)")]
+        for type in types:
+            with self.subTest(f"Testing covert starrocks type: {type}"):
+                self.validate_all(
+                    f"CREATE TABLE foo (a {type[1]})",
+                    read={
+                        "starrocks": f"CREATE TABLE foo (a {type[0]})",
+                    },
+                )
+
+        # Test create table with primary key, duplicate key, partitioned by, clustered by, sorted by and properties
         self.validate_all(
-            'CREATE TABLE foo (a BIGINT)',
-            read={'postgres': 'create table foo (a bigserial)'}
-        )
-        self.validate_all(
-            'CREATE TABLE foo (a DECIMAL)',
-            read={'mysql': 'create table foo (a decimal unsigned)'}
-        )
-        self.validate_all(
-            'CREATE TABLE foo (a STRING)',
-            read={'mysql': 'create table foo (a longtext)'}
-        )
-        self.validate_all(
-            'CREATE TABLE foo (a STRING)',
-            read={'postgres': 'create table foo (a enum)'}
-        )
+            "CREATE TABLE IF NOT EXISTS `tbl` (`tenantid` VARCHAR(1048576) COMMENT '', `create_day` DATE NOT NULL COMMENT '', `shopsite` VARCHAR(65533) NOT NULL COMMENT 'shopsite', `id` VARCHAR(65533) NOT NULL COMMENT 'shopsite id', `price` DECIMAL(38, 10) COMMENT 'price', `seq` INT COMMENT 'order', `use_status` SMALLINT COMMENT '0,1', `created_user` BIGINT COMMENT 'create user', `created_time` TIMESTAMP COMMENT 'create time', PRIMARY KEY (`tenantid`, `shopsite`, `id`)) COMMENT 'OLAP' PARTITIONED BY (`tenantid`) CLUSTERED BY (`tenantid`, `shopsite`, `id`) SORTED BY (`tenantid`, `shopsite`, `id`) INTO 10 BUCKETS PROPERTIES ('replication_num'='1', 'in_memory'='false', 'enable_persistent_index'='false', 'replicated_storage'='false', 'storage_medium'='HDD', 'compression'='LZ4')",
+            read={"starrocks": """CREATE TABLE IF NOT EXISTS `tbl` (
+    `tenantid` varchar(1048576) NULL COMMENT "",
+    `create_day` date NOT NULL COMMENT "",
+    `shopsite` varchar(65533) NOT NULL COMMENT "shopsite",
+    `id` varchar(65533) NOT NULL COMMENT "shopsite id",
+    `price` decimal128(38, 10) NULL COMMENT "price",
+    `seq` int(11) NULL COMMENT "order",
+    `use_status` smallint(6) NULL COMMENT "0,1",
+    `created_user` bigint(20) NULL COMMENT "create user",
+    `created_time` datetime NULL COMMENT "create time",
+) ENGINE=OLAP
+DUPLICATE KEY(tenantid)
+PRIMARY KEY(`tenantid`, `shopsite`, `id`)
+COMMENT "OLAP"
+PARTITION BY (`tenantid`)
+DISTRIBUTED BY HASH(`tenantid`, `shopsite`, `id`) BUCKETS 10
+ORDER BY (`tenantid`, `shopsite`, `id`)
+PROPERTIES (
+    "replication_num" = "1",
+    "in_memory" = "false",
+    "enable_persistent_index" = "false",
+    "replicated_storage" = "false",
+    "storage_medium" = "HDD",
+    "compression" = "LZ4"
+)"""})
 
     def test_dml(self):
         self.validate_all(
             "INSERT INTO a.b.c (`x`, `y`, `z`) VALUES (1, 'hello', CAST('2024-07-23 15:17:12' AS TIMESTAMP))",
-            read={'presto': "insert into a.b.c (\"x\", \"y\", \"z\") values (1, 'hello', timestamp '2024-07-23 15:17:12')"}
+            read={
+                'presto': "insert into a.b.c (\"x\", \"y\", \"z\") values (1, 'hello', timestamp '2024-07-23 15:17:12')"}
         )
 
     def test_functions(self):
@@ -62,6 +133,43 @@ class TestClickzetta(Validator):
             "select approx_percentile(a, 0.9)",
             write={
                 "clickzetta": "SELECT APPROX_PERCENTILE(a, 0.9)",
+            }
+        )
+        self.validate_all(
+            "SELECT WM_CONCAT(',', x)",
+            read={
+                "postgres": "SELECT STRING_AGG(x, ',')"
+            },
+            write={
+                "clickzetta": "SELECT WM_CONCAT(',', x)",
+            }
+        )
+        self.validate_all(
+            """SELECT DATE_FORMAT_PG(CURRENT_TIMESTAMP(), 'yyyy-"Q"Q')""",
+            read={
+                "postgres": """select to_char(current_timestamp, 'yyyy-"Q"Q')"""
+            },
+            write={
+                "clickzetta": """SELECT DATE_FORMAT_PG(CURRENT_TIMESTAMP(), 'yyyy-"Q"Q')""",
+            }
+        )
+        self.validate_all(
+            "SELECT DATE_FORMAT_PG(CONVERT_TIMEZONE('America/Toronto', CONVERT_TIMEZONE('UTC+0', 1692759280)), 'yyyy-MM-dd HH24:MI:ss')",
+            read={
+                "postgres": "select to_char(to_timestamp(1692759280) at time zone 'America/Toronto', 'yyyy-MM-dd HH24:MI:ss');"
+            },
+            write={
+                "clickzetta": "SELECT DATE_FORMAT_PG(CONVERT_TIMEZONE('America/Toronto', CONVERT_TIMEZONE('UTC+0', 1692759280)), 'yyyy-MM-dd HH24:MI:ss')",
+            }
+        )
+        # TODO Need to add a case for to_timestamp(1693365993000/1000) when / is replaced with `div` in CONVERT_TIMEZONE.
+        self.validate_all(
+            "SELECT CONVERT_TIMEZONE('UTC+0', 1693365993)",
+            read={
+                "postgres": "select to_timestamp(1693365993)"
+            },
+            write={
+                "clickzetta": "SELECT CONVERT_TIMEZONE('UTC+0', 1693365993)",
             }
         )
         self.validate_all(
@@ -142,8 +250,8 @@ select j from a""",
             """SELECT CAST(JSON_EXTRACT(JSON '{"a": 1}', '$.a') AS STRING)""",
         )
         self.validate_all(
-            """SELECT CAST(PARSE_JSON(fieldvalue)['00000000-0000-0000-0000-00000000'] AS STRING) AS `编号` FROM VALUES ('{"00000000-0000-0000-0000-00000000":"编号01"}') AS t(fieldvalue)""",
-            read={'starrocks': """select cast(parse_json(fieldvalue) -> '00000000-0000-0000-0000-00000000' as varchar ) as `编号` from values('{"00000000-0000-0000-0000-00000000":"编号01"}') as t(fieldvalue)"""}
+            """SELECT CAST(fieldvalue['00000000-0000-0000-0000-00000000'] AS STRING) AS `code` FROM (SELECT JSON '{"00000000-0000-0000-0000-00000000":"code01"}' AS fieldvalue) AS t""",
+            read={'starrocks': """SELECT CAST(fieldvalue -> '00000000-0000-0000-0000-00000000' AS VARCHAR) AS `code` FROM (SELECT PARSE_JSON('{"00000000-0000-0000-0000-00000000":"code01"}') as fieldvalue) as t"""}
         )
         self.validate_all(
             """SELECT CAST(JSON_EXTRACT(JSON '{"a": 1}', '$.a') AS STRING)""",
@@ -162,12 +270,18 @@ select j from a""",
             read={'starrocks': "select array_agg(pv) from values(33),(334),(3),(6),(2) as t(pv)"}
         )
         self.validate_all(
-            "SELECT DATEADD(HOUR, 1, CURRENT_TIMESTAMP())",
-            read={'presto': "select date_add('hour', 1, now())"}
-        )
-        self.validate_all(
             "SELECT TO_TIMESTAMP(a, 'yyyy-MM-dd\\\'T\\\'HH:mm:ss\\\'Z\\\'')",
             read={'presto': "select parse_datetime(a, 'yyyy-MM-dd''T''HH:mm:ss''Z''')"}
+        )
+        # maxCompute DATETIME function
+        self.validate_all(
+            "SELECT TO_TIMESTAMP(a)",
+            read={'': "select DATETIME(a)"}
+        )
+        # maxCompute GETDATE function
+        self.validate_all(
+            "SELECT CURRENT_TIMESTAMP()",
+            read={'': "select GETDATE()"}
         )
         self.validate_all(
             "SELECT CAST('2020-01-01T00:00:00.000Z' AS TIMESTAMP)",
@@ -199,22 +313,17 @@ select j from a""",
         )
 
     def test_read_dialect_related_function(self):
-        import os
-
         # aes_decrypt
-        os.environ['READ_DIALECT'] = 'mysql'
         self.validate_all(
             'SELECT AES_DECRYPT_MYSQL(encrypted_string, key_string)',
             read={'mysql': 'select AES_DECRYPT(encrypted_string, key_string)'}
         )
-        os.environ.pop('READ_DIALECT')
         self.validate_all(
             "SELECT AES_DECRYPT(encrypted_string, key_string)",
             read={'spark': "select AES_DECRYPT(encrypted_string, key_string)"}
         )
 
         # date_format
-        os.environ['READ_DIALECT'] = 'mysql'
         self.validate_all(
             r"SELECT DATE_FORMAT_MYSQL(CURRENT_DATE, '%x-%v %a %W')",
             read={'presto': r"select DATE_FORMAT(CURRENT_DATE, '%x-%v %a %W')"}
@@ -233,7 +342,6 @@ select j from a""",
                     , date_format(timestamp('2024-08-22 14:53:12'), '%e') -- expected: 22
                     , date_format(timestamp('2024-08-22 14:53:12'), '%H %i %s') -- expected: 14 53 12"""}
         )
-        os.environ['READ_DIALECT'] = 'postgres'
         self.validate_all(
             r"SELECT DATE_FORMAT_PG(CURRENT_TIMESTAMP(), 'Mon-dd-YYYY,HH24:mi:ss')",
             read={'postgres': r"select to_char(now(), 'Mon-dd-YYYY,HH24:mi:ss')"}
@@ -253,23 +361,28 @@ select j from a""",
         )
 
         # struct/tuple
-        os.environ['READ_DIALECT'] = 'presto'
-        self.validate_all(
-            "SELECT (1 AS __c1, 'hello' AS __c2) = (2 AS __c1, 'world' AS __c2)",
-            read={'presto': "select (1,'hello') = (2,'world')"}
-        )
+        # https://prestodb.io/docs/current/functions/comparison.html#comparison-operators
+        presto_binary_predicates = [ '=', '!=', '>', '>=', '<', '<=', '<>']
+        spark_binary_predicates = ['=', '<>', '>', '>=', '<', '<=', '<>']
+        for i, predicate in enumerate(presto_binary_predicates):
+            with self.subTest(f"Testing comparison operator: {predicate}"):
+                spark_predicate = spark_binary_predicates[i]
+                self.validate_all(
+                    f"SELECT (1 AS col1, 'hello' AS col2) {spark_predicate} (2 AS col1, 'world' AS col2)",
+                    read={'presto': f"select (1,'hello') {predicate} (2,'world')"}
+                )
+                self.validate_all(
+                    f"SELECT (1, 'hello') {spark_predicate} (2, 'world') FROM (SELECT 1 AS a) AS t(a) GROUP BY GROUPING SETS ((a, a))",
+                    read={
+                        'spark': f"select (1,'hello') {spark_predicate} (2,'world') FROM (SELECT 1 AS a) AS t(a) GROUP BY GROUPING SETS ((a, a))"}
+                )
+        # do not fill as __c? in values tuples
         self.validate_all(
             "SELECT * FROM VALUES (1, 'hello'), (2, 'world')",
             read={'presto': "select * from values (1,'hello'),(2,'world')"}
         )
-        os.environ['READ_DIALECT'] = 'spark'
-        self.validate_all(
-            "SELECT (1, 'hello') = (2, 'world')",
-            read={'spark': "select (1,'hello') = (2,'world')"}
-        )
 
-        # date_add
-        os.environ['READ_DIALECT'] = 'presto'
+        # date_add 3-arg
         self.validate_all(
             "SELECT TIMESTAMP_OR_DATE_ADD(LOWER('hour'), 1 + 2, CURRENT_TIMESTAMP())",
             read={'presto': "select date_add(lower('hour'), 1+2, now())"}
@@ -278,16 +391,31 @@ select j from a""",
             "SELECT TIMESTAMP_OR_DATE_ADD('HOUR', 1 + 2, CURRENT_TIMESTAMP())",
             read={'presto': "select date_add('hour', 1+2, now())"}
         )
-
-        # regexp_extract
-        os.environ['READ_DIALECT'] = 'presto'
         self.validate_all(
-            "SELECT REGEXP_EXTRACT('aaaa', 'a|b|c', 0)",
-            read={'presto': "select regexp_extract('aaaa', 'a|b|c')"}
+            "SELECT TIMESTAMP_OR_DATE_ADD('HOUR', 1, CURRENT_TIMESTAMP())",
+            read={'presto': "select DATE_ADD('hour', 1, now())",
+                  'starrocks': "select DATE_ADD(CURRENT_TIMESTAMP(), INTERVAL 1 HOUR)"}
         )
         self.validate_all(
-            "SELECT REGEXP_EXTRACT(`a`, 'a|b|c', 1)",
-            read={'presto': "select regexp_extract(\"a\", 'a|b|c', 1)"}
+            "SELECT TIMESTAMP_OR_DATE_ADD('DAY', 1, CAST('2001-08-22' AS DATE)), TIMESTAMP_OR_DATE_ADD('HOUR', 1, CURRENT_TIMESTAMP())",
+            read={'presto': "select date_add('Day', 1, DATE '2001-08-22'), date_add('hour', 1, current_timestamp)"}
+        )
+        # dateadd 2-arg
+        self.validate_all(
+            "SELECT DATE_ADD(CURRENT_TIMESTAMP(), 1)",
+            read={'spark': "SELECT DATE_ADD(CURRENT_TIMESTAMP(), 1)", }
+        )
+
+        # regexp_extract
+        self.validate_all(
+            "SELECT REGEXP_EXTRACT('aaaa', 'a|b|c', 0)",
+            read={'presto': "select regexp_extract('aaaa', 'a|b|c')"},
+            write={'clickzetta': "SELECT REGEXP_EXTRACT('aaaa', 'a|b|c', 0)"}
+        )
+        self.validate_all(
+            "SELECT REGEXP_EXTRACT(`a`, 'a|b|c')",
+            read={'presto': "SELECT REGEXP_EXTRACT(\"a\", 'a|b|c', 1)"},
+            write={'clickzetta': "SELECT REGEXP_EXTRACT(`a`, 'a|b|c')"}
         )
 
         # rlike
@@ -309,13 +437,10 @@ select j from a""",
         )
 
         # day_of_week
-        os.environ['READ_DIALECT'] = 'presto'
         self.validate_all(
             "SELECT DAYOFWEEK_ISO(d), DAYOFWEEK_ISO(d), DAYOFYEAR(d), DAYOFYEAR(d), YEAROFWEEK(d), YEAROFWEEK(d)",
             read={'presto': "select dow(d), day_of_week(d), doy(d), day_of_year(d), yow(d), year_of_week(d)"}
         )
-
-        os.environ.pop('READ_DIALECT')
 
     def test_group_sql_expression(self):
         self.validate_identity(
@@ -343,9 +468,6 @@ select j from a""",
                 'clickzetta': sql
             },
         )
-
-
-
 
         sql = "SELECT a, AVG(b), AVG(c), COUNT(*) FROM VALUES ('A1', 2, 2), ('A1', 1, 1), ('A2', 3, 3)," + \
               " ('A1', 1, 1) AS tab(a, b, c) GROUP BY ROLLUP (a, b)"

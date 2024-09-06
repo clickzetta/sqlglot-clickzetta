@@ -3,31 +3,23 @@ from __future__ import annotations
 import logging
 import typing as t
 
-from sqlglot import exp, transforms
-from sqlglot.dialects.mysql import MySQL
+from sqlglot import exp
+from sqlglot import transforms
 from sqlglot.dialects.dialect import (
     rename_func,
-    if_sql, )
-from sqlglot.dialects.postgres import Postgres
+    if_sql,
+)
 from sqlglot.dialects.spark import Spark
 from sqlglot.tokens import Tokenizer, TokenType
 
 logger = logging.getLogger("sqlglot")
 
-def is_read_dialect(target: str) -> bool:
-    target = target.upper()
-    import os
-    read_dialect = os.environ.get('READ_DIALECT')
-    if not read_dialect:
-        return False
-    if target == 'MYSQL' and read_dialect.upper() in ['MYSQL', 'PRESTO', 'TRINO', 'ATHENA', 'STARROCKS', 'DORIS']:
-        return True
-    if target == 'POSTGRES' and read_dialect.upper() in ['POSTGRES', 'REDSHIFT']:
-        return True
-    if target == read_dialect.upper():
-        return True
+try:
+    import local_clickzetta_settings
+except ImportError as e:
+    logger.warning(f'Failed to import local_clickzetta_settings, reason: {e}')
+    pass
 
-    return False
 
 def _transform_create(expression: exp.Expression) -> exp.Expression:
     """Remove index column constraints.
@@ -51,17 +43,12 @@ def _groupconcat_to_wmconcat(self: ClickZetta.Generator, expression: exp.GroupCo
     return f"WM_CONCAT({sep}, {self.sql(this)})"
 
 def _anonymous_func(self: ClickZetta.Generator, expression: exp.Anonymous) -> str:
-    if expression.this.upper() == 'DATETIME':
-        # in MaxCompute, datetime(col) is an alias of cast(col as datetime)
-        return f"{self.sql(expression.expressions[0])}::TIMESTAMP"
-    elif expression.this.upper() == 'GETDATE':
+    if expression.this.upper() == 'GETDATE':
         return f"CURRENT_TIMESTAMP()"
     elif expression.this.upper() == 'LAST_DAY_OF_MONTH':
         return f"LAST_DAY({self.sql(expression.expressions[0])})"
     elif expression.this.upper() == 'TO_ISO8601':
         return f"DATE_FORMAT({self.sql(expression.expressions[0])}, 'yyyy-MM-dd\\\'T\\\'hh:mm:ss.SSSxxx')"
-    elif expression.this.upper() == 'AES_DECRYPT' and is_read_dialect('mysql'):
-        return f"AES_DECRYPT_MYSQL({self.sql(expression.expressions[0])}, {self.sql(expression.expressions[1])})"
     elif expression.this.upper() == 'MAP_AGG':
         return f"MAP_FROM_ENTRIES(COLLECT_LIST(STRUCT({self.expressions(expression)})))"
     elif expression.this.upper() == 'JSON_ARRAY_GET':
@@ -83,9 +70,6 @@ def _anonymous_func(self: ClickZetta.Generator, expression: exp.Anonymous) -> st
         return f"DAYOFYEAR({self.sql(expression.expressions[0])})"
     elif expression.this.upper() == 'YOW' or expression.this.upper() == 'YEAR_OF_WEEK':
         return f"YEAROFWEEK({self.sql(expression.expressions[0])})"
-    # TODO: temporary workaround for presto 'select current_timezone()'
-    elif expression.this.upper() == 'CURRENT_TIMEZONE':
-        return f"'Asia/Shanghai'"
     elif expression.this.upper() == 'GROUPING':
         return f"GROUPING_ID({self.expressions(expression, flat=True)})"
     elif expression.this.upper() == 'MURMUR_HASH3_32':
@@ -188,62 +172,27 @@ def unnest_to_values(self: ClickZetta.Generator, expression: exp.Unnest):
     return expression.sql()
 
 
-def time_to_str(self: ClickZetta.Generator, expression: exp.TimeToStr):
-    this = self.sql(expression, "this")
-    if is_read_dialect('mysql'):
-        _format = self.format_time(expression, inverse_time_mapping=MySQL.INVERSE_TIME_MAPPING,
-                                   inverse_time_trie=MySQL.INVERSE_TIME_TRIE)
-        return f"DATE_FORMAT_MYSQL({this}, {_format})"
-    elif is_read_dialect('postgres'):
-        _format = self.format_time(expression, inverse_time_mapping=Postgres.INVERSE_TIME_MAPPING,
-                                   inverse_time_trie=Postgres.INVERSE_TIME_TRIE)
-        return f"DATE_FORMAT_PG({this}, {_format})"
-
-    # fallback to hive implementation
-    _format = self.format_time(expression)
-    return f"DATE_FORMAT({this}, {_format})"
-
-
-def fill_tuple_with_column_name(self: ClickZetta.Generator, expression: exp.Tuple) -> str:
-    if (not isinstance(expression.parent, exp.Values) and not isinstance(expression.parent.parent, exp.Group)
-            and is_read_dialect('mysql')):
-        elements = []
-        for i, e in enumerate(expression.expressions):
-            elements.append(f'{self.sql(e)} AS __c{i+1}')
-        return f"({', '.join(elements)})"
-    else:
-        return f"({self.expressions(expression, flat=True)})"
-
 def date_add_sql(self: ClickZetta.Generator, expression: exp.DateAdd) -> str:
-    # this is a workaround since date_add in presto should be parsed as TsOrDsAdd
+    """
+    Convert date_add to TIMESTAMP_OR_DATE_ADD.
+
+    Note the currently difference between `exp.DateAdd` and `exp.TimestampAdd` and `exp.Anonymous(date_add)`
+    | dialect | sql example | expression | return type |
+    |---------|--------------|------------|--------------|
+    | starrocks | select date_add('2010-11-30 23:59:59', INTERVAL 2 DAY) | exp.DateAdd | timestamp or date |
+    | presto | select date_add('2010-11-30 23:59:59', INTERVAL 2 DAY) | exp.DateAdd | timestamp or date |
+    | spark | select date_add('2024-01-01', 1) | exp.Anonymous | date |
+    | spark | select dateadd(DAY, 1, '2024-01-01') | exp.TimestampAdd | timestamp |
+    """
     # https://prestodb.io/docs/current/functions/datetime.html#date_add
-    if is_read_dialect('presto'):
-        unit = expression.args.get('unit')
-        if isinstance(unit, exp.Var):
-            unit_str = f"'{self.sql(unit)}'"
-        else:
-            unit_str = self.sql(unit)
-        return f"TIMESTAMP_OR_DATE_ADD({unit_str}, {self.sql(expression.expression)}, {self.sql(expression.this)})"
-    return f"DATEADD({self.sql(expression.args.get('unit'))}, {self.sql(expression.expression)}, {self.sql(expression.this)})"
-
-def regexp_extract_sql(self: ClickZetta.Generator, expression: exp.RegexpExtract):
-    bad_args = list(filter(expression.args.get, ("position", "occurrence", "parameters")))
-    if bad_args:
-        self.unsupported(f"REGEXP_EXTRACT does not support the following arg(s): {bad_args}")
-
-    group = expression.args.get('group')
-    if not group and is_read_dialect('presto'):
-        return f"REGEXP_EXTRACT({self.sql(expression.this)}, {self.sql(expression.expression)}, 0)"
-
-    return self.func(
-        "REGEXP_EXTRACT", expression.this, expression.expression, expression.args.get('group')
-    )
-
-def adjust_day_of_week(self: ClickZetta.Generator, expression: exp.DayOfWeek):
-    if is_read_dialect('presto'):
-        return f'DAYOFWEEK_ISO({self.sql(expression.this)})'
+    unit = expression.args.get('unit')
+    if not unit:
+        unit = exp.Literal.string("DAY")
+    if isinstance(unit, exp.Var):
+        unit_str = f"'{self.sql(unit)}'"
     else:
-        return f'DAYOFWEEK({self.sql(expression.this)})'
+        unit_str = self.sql(unit)
+    return f"TIMESTAMP_OR_DATE_ADD({unit_str}, {self.sql(expression.expression)}, {self.sql(expression.this)})"
 
 
 def _transform_group_sql(expression: exp.Expression) -> exp.Expression:
@@ -314,11 +263,15 @@ class ClickZetta(Spark):
         }
 
     class Parser(Spark.Parser):
-        pass
+        PROPERTY_PARSERS = {
+            **Spark.Parser.PROPERTY_PARSERS,
+            # ClickZetta has properties syntax similar to MySQL. e.g. PROPERTIES('key1'='value')
+            "PROPERTIES": lambda self: self._parse_wrapped_properties(),
+        }
 
     class Generator(Spark.Generator):
-
         RESERVED_KEYWORDS = {'all', 'user', 'to', 'check', 'order'}
+        WITH_PROPERTIES_PREFIX = "PROPERTIES"
 
         TYPE_MAPPING = {
             **Spark.Generator.TYPE_MAPPING,
@@ -340,11 +293,14 @@ class ClickZetta(Spark):
             exp.DataType.Type.SERIAL: "INT",
             exp.DataType.Type.SMALLSERIAL: "SMALLINT",
             exp.DataType.Type.BIGDECIMAL: "DECIMAL",
+            # starrocks decimal types
+            exp.DataType.Type.DECIMAL32: "DECIMAL",
+            exp.DataType.Type.DECIMAL64: "DECIMAL",
+            exp.DataType.Type.DECIMAL128: "DECIMAL",
         }
 
         PROPERTIES_LOCATION = {
             **Spark.Generator.PROPERTIES_LOCATION,
-            # exp.DistributedByProperty: exp.Properties.Location.POST_SCHEMA,
             exp.PrimaryKey: exp.Properties.Location.POST_NAME,
             exp.EngineProperty: exp.Properties.Location.POST_SCHEMA,
         }
@@ -358,7 +314,10 @@ class ClickZetta(Spark):
                     unnest_to_explode,
                 ]
             ),
+            # in MaxCompute, datetime(col) is an alias of cast(col as datetime)
+            exp.Datetime: rename_func("TO_TIMESTAMP"),
             exp.DefaultColumnConstraint: lambda self, e: '',
+            exp.DuplicateKeyProperty: lambda self, e: '',
             exp.OnUpdateColumnConstraint: lambda self, e: '',
             exp.AutoIncrementColumnConstraint: lambda self, e: '',
             exp.CollateColumnConstraint: lambda self, e: '',
@@ -373,9 +332,7 @@ class ClickZetta(Spark):
             exp.UnixToTime: lambda self, e: self.func(
                 "CONVERT_TIMEZONE", "'UTC+0'", e.this
             ),
-            # exp.DistributedByProperty: lambda self, e: self.distributedbyproperty_sql(e),
             exp.EngineProperty: lambda self, e: '',
-            exp.TimeToStr: time_to_str,
             exp.Pow: rename_func("POW"),
             exp.ApproxQuantile: rename_func("APPROX_PERCENTILE"),
             exp.JSONFormat: rename_func("TO_JSON"),
@@ -384,11 +341,9 @@ class ClickZetta(Spark):
             exp.If: if_sql(false_value=exp.Null()),
             exp.Unnest: unnest_to_values,
             exp.Try: lambda self, e: self.sql(e, "this"),
-            exp.Tuple: fill_tuple_with_column_name,
             exp.GenerateSeries: rename_func("SEQUENCE"),
             exp.DateAdd: date_add_sql,
-            exp.RegexpExtract: regexp_extract_sql,
-            exp.DayOfWeek: adjust_day_of_week,
+            exp.DayOfWeekIso: lambda self, e: self.func("DAYOFWEEK_ISO", e.this),
             exp.Group: transforms.preprocess([_transform_group_sql]),
             exp.RegexpLike: rename_func("RLIKE"),
             exp.JSONExtract: lambda self, e: _json_extract("JSON_EXTRACT", self, e),
@@ -396,13 +351,6 @@ class ClickZetta(Spark):
             exp.ArrayAgg: rename_func("COLLECT_LIST"),
             exp.FromISO8601Timestamp: lambda self, e: f"{self.sql(exp.cast(e.this, exp.DataType.Type.TIMESTAMP))}",
         }
-
-        # def distributedbyproperty_sql(self, expression: exp.DistributedByProperty) -> str:
-        #     expressions = self.expressions(expression, key="expressions", flat=True)
-        #     sorted_by = self.expressions(expression, key="sorted_by", flat=True)
-        #     sorted_by = f" SORTED BY ({sorted_by})" if sorted_by else ""
-        #     buckets = self.sql(expression, "buckets")
-        #     return f"HASH CLUSTERED BY ({expressions}){sorted_by} INTO {buckets} BUCKETS"
 
         def datatype_sql(self, expression: exp.DataType) -> str:
             """Remove unsupported type params from int types: eg. int(10) -> int
@@ -414,27 +362,30 @@ class ClickZetta(Spark):
                 else type_value
             )
             if type_value in exp.DataType.INTEGER_TYPES or \
-                type_value in {
-                    exp.DataType.Type.UTINYINT,
-                    exp.DataType.Type.USMALLINT,
-                    exp.DataType.Type.UMEDIUMINT,
-                    exp.DataType.Type.UINT,
-                    exp.DataType.Type.UINT128,
-                    exp.DataType.Type.UINT256,
-
-                    exp.DataType.Type.ENUM,
-               }:
+                    type_value in {
+                exp.DataType.Type.UTINYINT,
+                exp.DataType.Type.USMALLINT,
+                exp.DataType.Type.UMEDIUMINT,
+                exp.DataType.Type.UINT,
+                exp.DataType.Type.UINT128,
+                exp.DataType.Type.UINT256,
+                exp.DataType.Type.ENUM,
+                exp.DataType.Type.FLOAT,
+                exp.DataType.Type.DOUBLE,
+            }:
                 return type_sql
             return super().datatype_sql(expression)
 
-        def tochar_sql(self, expression: exp.ToChar) -> str:
-            this = expression.args.get('this')
-            format = expression.args.get('format')
-            if format:
-                format_str = str(format).replace('mm', 'MM').replace('mi', 'mm')
-                return f"DATE_FORMAT_PG({self.sql(this)}, {self.sql(format_str)})"
-
-            return super().tochar_sql(expression)
+        def distributedbyproperty_sql(self, expression: exp.DistributedByProperty) -> str:
+            expressions = self.expressions(expression, key="expressions", flat=True)
+            order = self.expressions(expression, key="order", flat=True)
+            order = f" SORTED BY {order}" if order else ""
+            buckets = self.sql(expression, "buckets")
+            if not buckets:
+                self.unsupported(
+                    "DistributedByHash without buckets, clickzetta requires a number of buckets"
+                )
+            return f"CLUSTERED BY ({expressions}){order} INTO {buckets} BUCKETS"
 
         def preprocess(self, expression: exp.Expression) -> exp.Expression:
             """Apply generic preprocessing transformations to a given expression."""
