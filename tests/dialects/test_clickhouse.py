@@ -28,6 +28,7 @@ class TestClickhouse(Validator):
         self.assertEqual(expr.sql(dialect="clickhouse"), "COUNT(x)")
         self.assertIsNone(expr._meta)
 
+        self.validate_identity("SELECT toString(CHAR(104.1, 101, 108.9, 108.9, 111, 32))")
         self.validate_identity("@macro").assert_is(exp.Parameter).this.assert_is(exp.Var)
         self.validate_identity("SELECT toFloat(like)")
         self.validate_identity("SELECT like")
@@ -160,10 +161,10 @@ class TestClickhouse(Validator):
         )
 
         self.validate_all(
-            "char(67) || char(65) || char(84)",
+            "CHAR(67) || CHAR(65) || CHAR(84)",
             read={
-                "clickhouse": "char(67) || char(65) || char(84)",
-                "oracle": "chr(67) || chr(65) || chr(84)",
+                "clickhouse": "CHAR(67) || CHAR(65) || CHAR(84)",
+                "oracle": "CHR(67) || CHR(65) || CHR(84)",
             },
         )
         self.validate_all(
@@ -515,6 +516,7 @@ class TestClickhouse(Validator):
         )
         self.validate_identity("SELECT TRIM(TRAILING ')' FROM '(   Hello, world!   )')")
         self.validate_identity("SELECT TRIM(LEADING '(' FROM '(   Hello, world!   )')")
+        self.validate_identity("current_timestamp").assert_is(exp.Column)
 
     def test_clickhouse_values(self):
         values = exp.select("*").from_(
@@ -1014,6 +1016,12 @@ LIFETIME(MIN 0 MAX 0)""",
 )"""
             },
             pretty=True,
+        )
+
+        self.assertIsNotNone(
+            self.validate_identity("CREATE TABLE t1 (a String MATERIALIZED func())").find(
+                exp.ColumnConstraint
+            )
         )
 
     def test_agg_functions(self):

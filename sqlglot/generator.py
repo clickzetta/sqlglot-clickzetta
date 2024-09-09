@@ -592,6 +592,8 @@ class Generator(metaclass=_Generator):
         "_escaped_quote_end",
         "_escaped_identifier_end",
         "_next_name",
+        "_identifier_start",
+        "_identifier_end",
     )
 
     def __init__(
@@ -638,6 +640,9 @@ class Generator(metaclass=_Generator):
         )
 
         self._next_name = name_sequence("_t")
+
+        self._identifier_start = self.dialect.IDENTIFIER_START
+        self._identifier_end = self.dialect.IDENTIFIER_END
 
     def generate(self, expression: exp.Expression, copy: bool = True) -> str:
         """
@@ -1431,14 +1436,14 @@ class Generator(metaclass=_Generator):
         text = expression.name
         lower = text.lower()
         text = lower if self.normalize and not expression.quoted else text
-        text = text.replace(self.dialect.IDENTIFIER_END, self._escaped_identifier_end)
+        text = text.replace(self._identifier_end, self._escaped_identifier_end)
         if (
             expression.quoted
             or self.dialect.can_identify(text, self.identify)
             or lower in self.RESERVED_KEYWORDS
             or (not self.dialect.IDENTIFIERS_CAN_START_WITH_DIGIT and text[:1].isdigit())
         ):
-            text = f"{self.dialect.IDENTIFIER_START}{text}{self.dialect.IDENTIFIER_END}"
+            text = f"{self._identifier_start}{text}{self._identifier_end}"
         return text
 
     def hex_sql(self, expression: exp.Hex) -> str:
@@ -3190,7 +3195,9 @@ class Generator(metaclass=_Generator):
         options = self.expressions(expression, key="options")
         options = f", {options}" if options else ""
         kind = self.sql(expression, "kind")
-        return f"ALTER {kind}{exists}{only} {self.sql(expression, 'this')}{on_cluster} {actions}{options}"
+        not_valid = " NOT VALID" if expression.args.get("not_valid") else ""
+
+        return f"ALTER {kind}{exists}{only} {self.sql(expression, 'this')}{on_cluster} {actions}{not_valid}{options}"
 
     def add_column_sql(self, expression: exp.Alter) -> str:
         if self.ALTER_TABLE_INCLUDE_COLUMN_KEYWORD:
@@ -3580,9 +3587,12 @@ class Generator(metaclass=_Generator):
         on = f"ON {self.sql(expression, 'on')}"
         expressions = self.expressions(expression, sep=" ", indent=False)
         sep = self.sep()
+        returning = self.expressions(expression, key="returning", indent=False)
+        returning = f"RETURNING {returning}" if returning else ""
 
         return self.prepend_ctes(
-            expression, f"MERGE INTO {this}{table_alias}{sep}{using}{sep}{on}{sep}{expressions}"
+            expression,
+            f"MERGE INTO {this}{table_alias}{sep}{using}{sep}{on}{sep}{expressions}{sep}{returning}",
         )
 
     def tochar_sql(self, expression: exp.ToChar) -> str:

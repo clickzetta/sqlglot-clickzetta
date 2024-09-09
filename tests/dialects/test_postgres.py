@@ -794,6 +794,9 @@ class TestPostgres(Validator):
         self.validate_identity(
             'SELECT js, js IS JSON ARRAY WITH UNIQUE KEYS AS "array w. UK?", js IS JSON ARRAY WITHOUT UNIQUE KEYS AS "array w/o UK?", js IS JSON ARRAY UNIQUE KEYS AS "array w UK 2?" FROM t'
         )
+        self.validate_identity(
+            "MERGE INTO target_table USING source_table AS source ON target.id = source.id WHEN MATCHED THEN DO NOTHING WHEN NOT MATCHED THEN DO NOTHING RETURNING MERGE_ACTION(), *"
+        )
 
     def test_ddl(self):
         # Checks that user-defined types are parsed into DataType instead of Identifier
@@ -845,6 +848,9 @@ class TestPostgres(Validator):
         self.validate_identity("ALTER TABLE t1 SET ACCESS METHOD method")
         self.validate_identity("ALTER TABLE t1 SET TABLESPACE tablespace")
         self.validate_identity("ALTER TABLE t1 SET (fillfactor = 5, autovacuum_enabled = TRUE)")
+        self.validate_identity(
+            "ALTER TABLE tested_table ADD CONSTRAINT unique_example UNIQUE (column_name) NOT VALID"
+        )
         self.validate_identity(
             "CREATE FUNCTION pymax(a INT, b INT) RETURNS INT LANGUAGE plpython3u AS $$\n  if a > b:\n    return a\n  return b\n$$",
         )

@@ -187,6 +187,8 @@ class Parser(metaclass=_Parser):
         "ARRAY_AGG": lambda args, dialect: exp.ArrayAgg(
             this=seq_get(args, 0), nulls_excluded=dialect.ARRAY_AGG_INCLUDES_NULLS is None or None
         ),
+        "CHAR": lambda args: exp.Chr(expressions=args),
+        "CHR": lambda args: exp.Chr(expressions=args),
         "COUNT": lambda args: exp.Count(this=seq_get(args, 0), expressions=args[1:], big_int=True),
         "CONCAT": lambda args, dialect: exp.Concat(
             expressions=args,
@@ -5359,18 +5361,19 @@ class Parser(metaclass=_Parser):
             ("ALIAS", "MATERIALIZED")
         ):
             persisted = self._prev.text.upper() == "MATERIALIZED"
-            constraints.append(
-                self.expression(
-                    exp.ComputedColumnConstraint,
-                    this=self._parse_assignment(),
-                    persisted=persisted or self._match_text_seq("PERSISTED"),
-                    not_null=self._match_pair(TokenType.NOT, TokenType.NULL),
-                )
+            constraint_kind = exp.ComputedColumnConstraint(
+                this=self._parse_assignment(),
+                persisted=persisted or self._match_text_seq("PERSISTED"),
+                not_null=self._match_pair(TokenType.NOT, TokenType.NULL),
             )
+            constraints.append(self.expression(exp.ColumnConstraint, kind=constraint_kind))
         elif kind and self._match_pair(TokenType.ALIAS, TokenType.L_PAREN, advance=False):
             self._match(TokenType.ALIAS)
             constraints.append(
-                self.expression(exp.TransformColumnConstraint, this=self._parse_field())
+                self.expression(
+                    exp.ColumnConstraint,
+                    kind=exp.TransformColumnConstraint(this=self._parse_field()),
+                )
             )
 
         while True:
@@ -5482,6 +5485,9 @@ class Parser(metaclass=_Parser):
             return self.expression(exp.CaseSpecificColumnConstraint, not_=True)
         if self._match_text_seq("FOR", "REPLICATION"):
             return self.expression(exp.NotForReplicationColumnConstraint)
+
+        # Unconsume the `NOT` token
+        self._retreat(self._index - 1)
         return None
 
     def _parse_column_constraint(self) -> t.Optional[exp.Expression]:
@@ -6784,6 +6790,7 @@ class Parser(metaclass=_Parser):
         parser = self.ALTER_PARSERS.get(self._prev.text.upper()) if self._prev else None
         if parser:
             actions = ensure_list(parser(self))
+            not_valid = self._match_text_seq("NOT", "VALID")
             options = self._parse_csv(self._parse_property)
 
             if not self._curr and actions:
@@ -6796,6 +6803,7 @@ class Parser(metaclass=_Parser):
                     only=only,
                     options=options,
                     cluster=cluster,
+                    not_valid=not_valid,
                 )
 
         return self._parse_as_command(start)
@@ -6819,6 +6827,7 @@ class Parser(metaclass=_Parser):
             using=using,
             on=on,
             expressions=self._parse_when_matched(),
+            returning=self._match(TokenType.RETURNING) and self._parse_csv(self._parse_bitwise),
         )
 
     def _parse_when_matched(self) -> t.List[exp.When]:
@@ -6859,7 +6868,7 @@ class Parser(metaclass=_Parser):
             elif self._match(TokenType.DELETE):
                 then = self.expression(exp.Var, this=self._prev.text)
             else:
-                then = None
+                then = self._parse_var_from_options(self.CONFLICT_ACTIONS)
 
             whens.append(
                 self.expression(

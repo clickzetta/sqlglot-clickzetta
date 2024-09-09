@@ -403,6 +403,9 @@ class ClickHouse(Dialect):
         NO_PAREN_FUNCTION_PARSERS = parser.Parser.NO_PAREN_FUNCTION_PARSERS.copy()
         NO_PAREN_FUNCTION_PARSERS.pop("ANY")
 
+        NO_PAREN_FUNCTIONS = parser.Parser.NO_PAREN_FUNCTIONS.copy()
+        NO_PAREN_FUNCTIONS.pop(TokenType.CURRENT_TIMESTAMP)
+
         RANGE_PARSERS = {
             **parser.Parser.RANGE_PARSERS,
             TokenType.GLOBAL: lambda self, this: self._match(TokenType.IN)
@@ -885,7 +888,7 @@ class ClickHouse(Dialect):
             exp.Variance: rename_func("varSamp"),
             exp.SchemaCommentProperty: lambda self, e: self.naked_property(e),
             exp.Stddev: rename_func("stddevSamp"),
-            exp.Chr: lambda self, e: self.func("char", e.this),
+            exp.Chr: rename_func("CHAR"),
             exp.Lag: lambda self, e: self.func(
                 "lagInFrame", e.this, e.args.get("offset"), e.args.get("default")
             ),
