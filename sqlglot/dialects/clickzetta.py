@@ -15,7 +15,7 @@ from sqlglot.tokens import Tokenizer, TokenType
 logger = logging.getLogger("sqlglot")
 
 try:
-    import local_clickzetta_settings
+    from sqlglot import local_clickzetta_settings
 except ImportError as e:
     logger.warning(f'Failed to import local_clickzetta_settings, reason: {e}')
 
