@@ -329,6 +329,8 @@ def _parse_json(self, e: exp.ParseJSON) -> str:
 class ClickZetta(Spark):
     NULL_ORDERING = "nulls_are_small"
     LOG_BASE_FIRST = None
+    # https://github.com/tobymao/sqlglot/issues/4013
+    STRICT_JSON_PATH_SYNTAX = False
 
     class Tokenizer(Spark.Tokenizer):
         KEYWORDS = {
