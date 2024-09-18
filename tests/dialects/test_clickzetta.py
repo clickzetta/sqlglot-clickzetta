@@ -1,5 +1,6 @@
 from tests.dialects.test_dialect import Validator
 
+
 class TestClickzetta(Validator):
     dialect = "clickzetta"
 
@@ -26,19 +27,14 @@ class TestClickzetta(Validator):
             "select json_extract(to, '$.billing_zone') as to_billing_zone",
             write={
                 "clickzetta": "SELECT JSON_EXTRACT(`to`, '$.billing_zone') AS to_billing_zone",
-              },
-        )
-        self.validate_all(
-            "select json_extract(to, '$.billing_zone') as to_billing_zone",
-            write={
-                "clickzetta": "SELECT JSON_EXTRACT(`to`, '$.billing_zone') AS to_billing_zone",
-              },
+            },
         )
 
     def test_ddl_types(self):
         starrocks_ddl_sqls = [
             ("DISTRIBUTED BY HASH (col1) BUCKETS 1", "CLUSTERED BY (col1) INTO 1 BUCKETS"),
-            ("DISTRIBUTED BY HASH (col1) BUCKETS 1 ORDER BY (col1)", "CLUSTERED BY (col1) SORTED BY (col1) INTO 1 BUCKETS"),
+            ("DISTRIBUTED BY HASH (col1) BUCKETS 1 ORDER BY (col1)",
+             "CLUSTERED BY (col1) SORTED BY (col1) INTO 1 BUCKETS"),
             ("DISTRIBUTED BY HASH (col1) BUCKETS 1 PROPERTIES ('replication_num'='1')",
              "CLUSTERED BY (col1) INTO 1 BUCKETS PROPERTIES ('replication_num'='1')"),
             ("DUPLICATE KEY (col1, col2) DISTRIBUTED BY HASH (col1) BUCKETS 1", "CLUSTERED BY (col1) INTO 1 BUCKETS"),
@@ -56,7 +52,7 @@ class TestClickzetta(Validator):
             read={
                 "starrocks": "CREATE TABLE foo (col0 DECIMAL(9, 1), col1 DECIMAL32(9, 1), col2 DECIMAL64(18, 10), col3 DECIMAL128(38, 10)) DISTRIBUTED BY HASH (col1) BUCKETS 1"}
         )
-        types = [("SERIAL", "INT"), ("BIGSERIAL", "BIGINT"), ("ENUM", "STRING"), ("INT DEFAULT 0", "INT"),]
+        types = [("SERIAL", "INT"), ("BIGSERIAL", "BIGINT"), ("ENUM", "STRING"), ("INT DEFAULT 0", "INT"), ]
         for type in types:
             with self.subTest(f"Testing covert postgres type: {type}"):
                 self.validate_all(
@@ -80,8 +76,8 @@ class TestClickzetta(Validator):
         # Test the starrocks type
         types = [("INT(11)", "INT"), ("INT(11) NOT NULL", "INT NOT NULL"),
                  ("SMALLINT(8)", "SMALLINT"), ("BIGINT(20)", "BIGINT"), ("datetime", "TIMESTAMP"),
-                 ("FLOAT(10, 2)", "FLOAT"), ("DOUBLE(10, 2)", "DOUBLE"),("DECIMAL(10, 2)", "DECIMAL(10, 2)"),
-                 ("DECIMAL32(9, 1)", "DECIMAL(9, 1)"),("DECIMAL64(18, 10)", "DECIMAL(18, 10)"),
+                 ("FLOAT(10, 2)", "FLOAT"), ("DOUBLE(10, 2)", "DOUBLE"), ("DECIMAL(10, 2)", "DECIMAL(10, 2)"),
+                 ("DECIMAL32(9, 1)", "DECIMAL(9, 1)"), ("DECIMAL64(18, 10)", "DECIMAL(18, 10)"),
                  ("DECIMAL128(38, 10)", "DECIMAL(38, 10)")]
         for type in types:
             with self.subTest(f"Testing covert starrocks type: {type}"):
@@ -130,9 +126,111 @@ PROPERTIES (
 
     def test_functions(self):
         self.validate_all(
-            "select approx_percentile(a, 0.9)",
+            "SELECT APPROX_PERCENTILE(a, 0.9)",
+            read={
+                "presto": "select approx_percentile(a, 0.9)",
+            },
             write={
                 "clickzetta": "SELECT APPROX_PERCENTILE(a, 0.9)",
+            }
+        )
+        self.validate_all(
+            "SELECT CAST(`current_timestamp` / 1000 AS TIMESTAMP)",
+            read={
+                "clickhouse": "select toDateTime (current_timestamp / 1000)"
+            }
+        )
+        self.validate_all(
+            "SELECT CAST(`current_timestamp` / 1000 AS BIGINT) FROM tab",
+            read={
+                "clickhouse": "select CAST(current_timestamp / 1000, 'bigint') from tab"
+            }
+        )
+        self.validate_all(
+            "SELECT CAST(`current_timestamp` / 1000 AS DATE)",
+            read={
+                "clickhouse": "select toDate (current_timestamp / 1000)"
+            }
+        )
+        self.validate_all(
+            "SELECT TIMESTAMP_MILLIS(1415792726123)",
+            read={
+                "clickhouse": "SELECT fromUnixTimestamp64Milli(1415792726123)"
+            }
+        )
+        # spark convert to_timestamp to cast syntax
+        # https://github.com/tobymao/sqlglot/issues/4102
+        to_start_of_func = ["Day", "Hour", "Minute", "Month", "Quarter", "Week", "Year", "Second"]
+        for func in to_start_of_func:
+            with self.subTest(f"Testing convert clickhouse toStartOfFunc: toStartOf{func}"):
+                self.validate_all(
+                    f"SELECT DATE_TRUNC('{func.upper()}', CAST('2023-04-21 10:20:30' AS TIMESTAMP))",
+                    read={
+                        "clickhouse": f"SELECT toStartOf{func}(toDateTime('2023-04-21 10:20:30'))"
+                    }
+                )
+        self.validate_all(
+            "SELECT REPLACE('data-science', '-', '_')",
+            read={
+                "clickhouse": "SELECT replaceAll('data-science', '-', '_')"
+            }
+        )
+
+        clickhouse_to_clickzetta_json_func = [
+            ("visitParamExtractRaw", "GET_JSON_OBJECT"),
+            ("JSONExtractRaw", "GET_JSON_OBJECT"),
+        ]
+        json = """'{"a.c": {"b": 1}}'"""
+        for name in clickhouse_to_clickzetta_json_func:
+            with self.subTest(f"Testing convert clickhouse function: {name}"):
+                self.validate_all(
+                    fr"""SELECT {name[1]}({json}, '$[\'a.c\']')""",
+                    read={
+                        "clickhouse": f"""SELECT {name[0]}({json}, 'a.c')"""
+                    }
+                )
+
+        clickhouse_to_clickzetta_json_func = [
+            ("JSONExtractString", "JSON_EXTRACT_STRING"),
+            ("visitParamExtractString", "JSON_EXTRACT_STRING"),
+            ("visitParamExtractBool", "JSON_EXTRACT_BOOLEAN"),
+            ("visitParamExtractInt", "JSON_EXTRACT_BIGINT"),
+            ("visitParamExtractFloat", "JSON_EXTRACT_DOUBLE"),
+            ("JSONExtractInt", "JSON_EXTRACT_BIGINT"),
+            ("JSONExtractBool", "JSON_EXTRACT_BOOLEAN"),
+            ("JSONExtractFloat", "JSON_EXTRACT_DOUBLE"),
+        ]
+        for name in clickhouse_to_clickzetta_json_func:
+            with self.subTest(f"Testing convert clickhouse function: {name}"):
+                self.validate_all(
+                    fr"""SELECT {name[1]}(JSON {json}, '$[\'a.c\']')""",
+                    read={
+                        "clickhouse": f"""SELECT {name[0]}({json}, 'a.c')"""
+                    }
+                )
+
+        self.validate_all(
+            """SELECT JSON_EXTRACT(JSON '{"a": "hello", "b": [-100, 200.0, "hello"]}', '$.b')::ARRAY<JSON>""",
+            read={
+                "clickhouse": """SELECT JSONExtractArrayRaw('{"a": "hello", "b": [-100, 200.0, "hello"]}', 'b')"""
+            }
+        )
+        self.validate_all(
+            """COUNT_IF((retCode <> '1100'))""",
+            read={
+                "clickhouse": "countIf((retCode != '1100'))"
+            }
+        )
+        self.validate_all(
+            "SELECT left, right, MULTIIF(left < right, 'left is smaller', left > right, 'left is greater', left = right, 'Both equal', 'Null value') AS result FROM LEFT_RIGHT",
+            read={
+                "clickhouse": "SELECT left, right, multiIf(left < right, 'left is smaller', left > right, 'left is greater', left = right, 'Both equal', 'Null value') AS result FROM LEFT_RIGHT"
+            }
+        )
+        self.validate_all(
+            "ISNOTNULL(x)",
+            read={
+                "clickhouse": "isNotNull(x)"
             }
         )
         self.validate_all(
@@ -154,62 +252,82 @@ PROPERTIES (
             }
         )
         self.validate_all(
-            "SELECT DATE_FORMAT_PG(CONVERT_TIMEZONE('America/Toronto', CONVERT_TIMEZONE('UTC+0', 1692759280)), 'yyyy-MM-dd HH24:MI:ss')",
+            "SELECT DATE_FORMAT_PG(CONVERT_TIMEZONE('America/Toronto', CAST(FROM_UNIXTIME(1692759280) AS TIMESTAMP)), 'yyyy-MM-dd HH24:MI:ss')",
             read={
                 "postgres": "select to_char(to_timestamp(1692759280) at time zone 'America/Toronto', 'yyyy-MM-dd HH24:MI:ss');"
             },
             write={
-                "clickzetta": "SELECT DATE_FORMAT_PG(CONVERT_TIMEZONE('America/Toronto', CONVERT_TIMEZONE('UTC+0', 1692759280)), 'yyyy-MM-dd HH24:MI:ss')",
+                "clickzetta": "SELECT DATE_FORMAT_PG(CONVERT_TIMEZONE('America/Toronto', CAST(FROM_UNIXTIME(1692759280) AS TIMESTAMP)), 'yyyy-MM-dd HH24:MI:ss')",
             }
         )
-        # TODO Need to add a case for to_timestamp(1693365993000/1000) when / is replaced with `div` in CONVERT_TIMEZONE.
         self.validate_all(
-            "SELECT CONVERT_TIMEZONE('UTC+0', 1693365993)",
+            "SELECT CAST(FROM_UNIXTIME(1415792726123 / 1000) AS TIMESTAMP)",
             read={
-                "postgres": "select to_timestamp(1693365993)"
+                "postgres": "select TO_TIMESTAMP(1415792726123/1000)"
             },
             write={
-                "clickzetta": "SELECT CONVERT_TIMEZONE('UTC+0', 1693365993)",
+                "clickzetta": "SELECT CAST(FROM_UNIXTIME(1415792726123 / 1000) AS TIMESTAMP)",
             }
         )
         self.validate_all(
-            "select to_iso8601(current_timestamp)",
+            r"SELECT DATE_FORMAT(CURRENT_TIMESTAMP(), 'yyyy-MM-dd\'T\'hh:mm:ss.SSSxxx')",
+            read={
+                "presto": "select to_iso8601(current_timestamp)"
+            },
             write={
-                "clickzetta": r"SELECT DATE_FORMAT(CURRENT_TIMESTAMP(), 'yyyy-MM-dd\'T\'hh:mm:ss.SSSxxx')",
+                "clickzetta": r"SELECT DATE_FORMAT(CAST(CURRENT_TIMESTAMP() AS TIMESTAMP), 'yyyy-MM-dd\'T\'hh:mm:ss.SSSxxx')",
             }
         )
         self.validate_all(
-            "select nullif('a',0)",
+            "SELECT IF('a' = 0, NULL, 'a')",
+            read={
+                "presto": "select nullif('a',0)",
+            },
             write={
                 "clickzetta": "SELECT IF('a' = 0, NULL, 'a')",
             }
         )
         self.validate_all(
-            "select try(1/0), try_cast(a as bigint)",
+            "SELECT 1 / 0, TRY_CAST(a AS BIGINT)",
+            read={
+                "presto": "select try(1/0), try_cast(a as bigint)",
+            },
             write={
                 "clickzetta": "SELECT 1 / 0, TRY_CAST(a AS BIGINT)",
             }
         )
         self.validate_all(
-            "select if(true, 'a')",
+            "SELECT IF(TRUE, 'a', NULL)",
+            read={
+                "presto": "select if(true, 'a')",
+            },
             write={
                 "clickzetta": "SELECT IF(TRUE, 'a', NULL)",
             }
         )
         self.validate_all(
-            "select power(10, 2)",
+            "SELECT POW(10, 2)",
+            read={
+                "presto": "select power(10, 2)",
+            },
             write={
                 "clickzetta": "SELECT POW(10, 2)",
             }
         )
         self.validate_all(
-            "select last_day_of_month(a)",
+            "SELECT LAST_DAY(a)",
+            read={
+                "presto": "select last_day_of_month(a)",
+            },
             write={
                 "clickzetta": "SELECT LAST_DAY(a)",
             }
         )
         self.validate_all(
-            "select json_format(json '{\"a\":1,\"b\":2}')",
+            "SELECT TO_JSON(JSON '{\"a\":1,\"b\":2}')",
+            read={
+                "presto": "select json_format(json '{\"a\":1,\"b\":2}')",
+            },
             write={
                 "clickzetta": "SELECT TO_JSON(JSON '{\"a\":1,\"b\":2}')",
             }
@@ -227,9 +345,12 @@ select j from a""",
             }
         )
         self.validate_all(
-            "select map_agg('a', date_trunc('day',now()))",
+            "SELECT MAP_FROM_ENTRIES(COLLECT_LIST(STRUCT('a', DATE_TRUNC('DAY', CURRENT_TIMESTAMP()))))",
+            read={
+                "presto": "select map_agg('a', date_trunc('day',NOW()))",
+            },
             write={
-                "clickzetta": "SELECT MAP_FROM_ENTRIES(COLLECT_LIST(STRUCT('a', DATE_TRUNC('DAY', now()))))",
+                "clickzetta": "SELECT MAP_FROM_ENTRIES(COLLECT_LIST(STRUCT('a', DATE_TRUNC('DAY', CURRENT_TIMESTAMP()))))",
             }
         )
         self.validate_all(
@@ -247,11 +368,13 @@ select j from a""",
             read={'presto': "select json_array_get(json_array_get(j,1),2)"}
         )
         self.validate_identity("""SELECT CAST(JSON_EXTRACT(PARSE_JSON('{"a": 1}'), '$.a') AS STRING)""",
-            """SELECT CAST(JSON_EXTRACT(JSON '{"a": 1}', '$.a') AS STRING)""",
-        )
+                               """SELECT CAST(JSON_EXTRACT(JSON '{"a": 1}', '$.a') AS STRING)""",
+                               )
+        # Starrocks Arrow function
         self.validate_all(
-            """SELECT CAST(fieldvalue['00000000-0000-0000-0000-00000000'] AS STRING) AS `code` FROM (SELECT JSON '{"00000000-0000-0000-0000-00000000":"code01"}' AS fieldvalue) AS t""",
-            read={'starrocks': """SELECT CAST(fieldvalue -> '00000000-0000-0000-0000-00000000' AS VARCHAR) AS `code` FROM (SELECT PARSE_JSON('{"00000000-0000-0000-0000-00000000":"code01"}') as fieldvalue) as t"""}
+            """SELECT CAST(JSON_EXTRACT(fieldvalue, '$.00000000-0000-0000-0000-00000000') AS STRING) AS `code` FROM (SELECT JSON '{"00000000-0000-0000-0000-00000000":"code01"}' AS fieldvalue) AS t""",
+            read={
+                'starrocks': """SELECT CAST(fieldvalue -> '00000000-0000-0000-0000-00000000' AS VARCHAR) AS `code` FROM (SELECT PARSE_JSON('{"00000000-0000-0000-0000-00000000":"code01"}') as fieldvalue) as t"""}
         )
         self.validate_all(
             """SELECT CAST(JSON_EXTRACT(JSON '{"a": 1}', '$.a') AS STRING)""",
@@ -263,7 +386,7 @@ select j from a""",
         )
         self.validate_all(
             "SELECT CHAR(CAST('1' + 65 AS INT))",
-            read={'starrocks': """select char("1" + 65)"""}
+            read={'starrocks': """select CHAR("1" + 65)"""}
         )
         self.validate_all(
             "SELECT COLLECT_LIST(pv) FROM VALUES (33), (334), (3), (6), (2) AS t(pv)",
@@ -326,11 +449,13 @@ select j from a""",
         # date_format
         self.validate_all(
             r"SELECT DATE_FORMAT_MYSQL(CURRENT_DATE, '%x-%v %a %W')",
-            read={'presto': r"select DATE_FORMAT(CURRENT_DATE, '%x-%v %a %W')"}
+            read={'presto': r"select DATE_FORMAT(CURRENT_DATE, '%x-%v %a %W')",
+                  'clickhouse': r"SELECT formatDateTime(CURRENT_DATE(), '%x-%v %a %W')"}
         )
         self.validate_all(
             "SELECT CAST(DATE_FORMAT_MYSQL(CAST('2024-08-22 14:53:12' AS TIMESTAMP), '%Y-%m-%d') AS DATE)",
-            read={'presto': r"""SELECT CAST(date_format(cast('2024-08-22 14:53:12' as TIMESTAMP), '%Y-%m-%d') AS DATE)"""}
+            read={
+                'presto': r"""SELECT CAST(date_format(cast('2024-08-22 14:53:12' as TIMESTAMP), '%Y-%m-%d') AS DATE)"""}
         )
         self.validate_all(
             "SELECT TIMESTAMP('2024-08-22 14:53:12'), DATE_FORMAT_MYSQL(TIMESTAMP('2024-08-22 "
@@ -362,7 +487,7 @@ select j from a""",
 
         # struct/tuple
         # https://prestodb.io/docs/current/functions/comparison.html#comparison-operators
-        presto_binary_predicates = [ '=', '!=', '>', '>=', '<', '<=', '<>']
+        presto_binary_predicates = ['=', '!=', '>', '>=', '<', '<=', '<>']
         spark_binary_predicates = ['=', '<>', '>', '>=', '<', '<=', '<>']
         for i, predicate in enumerate(presto_binary_predicates):
             with self.subTest(f"Testing comparison operator: {predicate}"):
@@ -502,8 +627,6 @@ select j from a""",
 
     def test_unnest(self):
         # From unnest
-        # Using a single map column:
-        # https://prestodb.io/docs/current/sql/select.html#unnest
         self.validate_all(
             "SELECT * FROM VALUES ('a', 1), ('b', 2), ('c', 3) AS t(s, i)",
             read={
@@ -518,9 +641,11 @@ select j from a""",
             read={'presto': "select * from unnest(sequence(-3,0))"}
         )
         self.validate_all(
-            r"""SELECT * FROM UNNEST(array('John','Jane','Jim','Jamie'), array(24,25,26,27)) AS t(name, age)""",
+            r"""SELECT * FROM UNNEST(ARRAY('John', 'Jane', 'Jim', 'Jamie'), ARRAY(24, 25, 26, 27)) AS t(name, age)""",
+            read={
+                'presto': r"""SELECT * FROM UNNEST(array('John','Jane','Jim','Jamie'), array(24,25,26,27)) AS t(name, age)""",
+            },
             write={
-                "postgres": "SELECT * FROM UNNEST(ARRAY['John', 'Jane', 'Jim', 'Jamie'], ARRAY[24, 25, 26, 27]) AS t(name, age)",
                 "clickzetta": "SELECT * FROM UNNEST(ARRAY('John', 'Jane', 'Jim', 'Jamie'), ARRAY(24, 25, 26, 27)) AS t(name, age)",
             },
         )
@@ -537,15 +662,21 @@ select j from a""",
         # Use UNNEST to convert into multiple columns
         # see: https://docs.starrocks.io/docs/sql-reference/sql-functions/array-functions/unnest/
         self.validate_all(
-            r"""SELECT id, t.type, t.scores FROM example_table, unnest(split(type, ";"), scores) AS t(type,scores)""",
+            r"""SELECT id, t.type, t.scores FROM example_table LATERAL VIEW INLINE(ARRAYS_ZIP(SPLIT(type, CONCAT('\\Q', ';')), scores)) t AS type, scores""",
+            read={
+                "starrocks": r"""SELECT id, t.type, t.scores FROM example_table, unnest(split(type, ";"), scores) AS t(type,scores)""",
+            },
             write={
-                "clickzetta": r"""SELECT id, t.type, t.scores FROM example_table LATERAL VIEW INLINE(ARRAYS_ZIP(SPLIT(type, ';'), scores)) t AS type, scores""",
+                "clickzetta": r"""SELECT id, t.type, t.scores FROM example_table LATERAL VIEW INLINE(ARRAYS_ZIP(SPLIT(type, CONCAT('\\Q', ';')), scores)) t AS type, scores""",
             },
         )
         self.validate_all(
-            r"""SELECT id, t.type, t.scores FROM example_table CROSS JOIN LATERAL unnest(split(type, ";"), scores) AS t(type,scores)""",
+            r"""SELECT id, t.type, t.scores FROM example_table LATERAL VIEW INLINE(ARRAYS_ZIP(SPLIT(type, CONCAT('\\Q', ';')), scores)) t AS type, scores""",
+            read={
+                "starrocks": r"""SELECT id, t.type, t.scores FROM example_table CROSS JOIN LATERAL unnest(split(type, ";"), scores) AS t(type,scores)""",
+            },
             write={
-                "clickzetta": r"""SELECT id, t.type, t.scores FROM example_table LATERAL VIEW INLINE(ARRAYS_ZIP(SPLIT(type, ';'), scores)) t AS type, scores""",
+                "clickzetta": r"""SELECT id, t.type, t.scores FROM example_table LATERAL VIEW INLINE(ARRAYS_ZIP(SPLIT(type, CONCAT('\\Q', ';')), scores)) t AS type, scores""",
             },
         )
         self.validate_all(
@@ -557,17 +688,38 @@ select j from a""",
             "SELECT id, t.col FROM tbl, UNNEST(scores) AS t(col)",
             "SELECT id, t.col FROM tbl CROSS JOIN LATERAL UNNEST(scores) AS t(col)",
         ]
+        clickzetta_lateral_explode_sqls = "SELECT id, t.col FROM tbl LATERAL VIEW EXPLODE(scores) t AS col"
 
         for sql in lateral_explode_sqls:
             with self.subTest(f"Testing Starrocks roundtrip & transpilation of: {sql}"):
                 self.validate_all(
-                    sql,
-                    write={
+                    clickzetta_lateral_explode_sqls,
+                    read={
                         "starrocks": sql,
-                        "clickzetta": "SELECT id, t.col FROM tbl LATERAL VIEW EXPLODE(scores) t AS col",
+                    },
+                    write={
+                        "clickzetta": clickzetta_lateral_explode_sqls,
                     },
                 )
 
+        self.validate_all(
+            "SELECT EXPLODE(ARRAY(1, 2, 3))",
+            read={
+                "clickhouse": "SELECT arrayJoin([1, 2, 3])",
+                "postgres": "SELECT UNNEST(ARRAY[1, 2, 3])",
+            },
+            write={
+                "clickzetta": "SELECT EXPLODE(ARRAY(1, 2, 3))",
+            }
+        )
+        self.validate_all(
+            "SELECT COUNT(DISTINCT col1) FROM tbl",
+            read={
+                "clickhouse": "SELECT uniqExact(col1) FROM tbl",
+            }
+        )
+
     def test_hash_func(self):
-        self.validate_all("select sum(murmur_hash3_32('test'))",
+        self.validate_all("SELECT SUM(MURMURHASH3_32('test'))",
+                          read={"starrocks": "select sum(murmur_hash3_32('test'))"},
                           write={"clickzetta": "SELECT SUM(MURMURHASH3_32('test'))"})

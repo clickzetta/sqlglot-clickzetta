@@ -15,10 +15,15 @@ from sqlglot.tokens import Tokenizer, TokenType
 logger = logging.getLogger("sqlglot")
 
 try:
-    import local_clickzetta_settings
+    from sqlglot import local_clickzetta_settings
 except ImportError as e:
     logger.warning(f'Failed to import local_clickzetta_settings, reason: {e}')
-    pass
+
+
+def _anonymous_agg_func(self: ClickZetta.Generator, expression: exp.AnonymousAggFunc) -> str:
+    if expression.this.upper() == 'UNIQEXACT':
+        return self.sql(exp.Count(this=exp.Distinct(expressions=expression)))
+    return self.func(expression.this, *expression.expressions)
 
 
 def _transform_create(expression: exp.Expression) -> exp.Expression:
@@ -35,6 +40,7 @@ def _transform_create(expression: exp.Expression) -> exp.Expression:
             schema.expressions.remove(e)
     return expression
 
+
 def _groupconcat_to_wmconcat(self: ClickZetta.Generator, expression: exp.GroupConcat) -> str:
     this = self.sql(expression, "this")
     sep = expression.args.get('separator')
@@ -42,42 +48,85 @@ def _groupconcat_to_wmconcat(self: ClickZetta.Generator, expression: exp.GroupCo
         sep = exp.Literal.string(',')
     return f"WM_CONCAT({sep}, {self.sql(this)})"
 
+
 def _anonymous_func(self: ClickZetta.Generator, expression: exp.Anonymous) -> str:
-    if expression.this.upper() == 'GETDATE':
+    dialect = self.sql(expression.parent_select, "dialect")
+    upper_name = expression.this.upper()
+    if upper_name == 'GETDATE':
         return f"CURRENT_TIMESTAMP()"
-    elif expression.this.upper() == 'LAST_DAY_OF_MONTH':
+    elif upper_name == 'LAST_DAY_OF_MONTH':
         return f"LAST_DAY({self.sql(expression.expressions[0])})"
-    elif expression.this.upper() == 'TO_ISO8601':
+    elif upper_name == 'TO_ISO8601':
         return f"DATE_FORMAT({self.sql(expression.expressions[0])}, 'yyyy-MM-dd\\\'T\\\'hh:mm:ss.SSSxxx')"
-    elif expression.this.upper() == 'MAP_AGG':
+    elif upper_name == 'MAP_AGG':
         return f"MAP_FROM_ENTRIES(COLLECT_LIST(STRUCT({self.expressions(expression)})))"
-    elif expression.this.upper() == 'JSON_ARRAY_GET':
+    elif upper_name == 'JSON_ARRAY_GET':
         if len(expression.expressions) != 2:
             raise ValueError(f'JSON_ARRAY_GET needs 2 args, got {len(expression.expressions)}')
         arg1 = self.sql(expression.expressions[0])
         arg2 = self.sql(expression.expressions[1])
         return f"IF(TYPEOF({arg1}) == 'json', ({arg1}::JSON)[{arg2}], PARSE_JSON({arg1}::STRING)[{arg2}])"
-    elif expression.this.upper() == 'PARSE_DATETIME':
+    elif upper_name == 'PARSE_DATETIME':
         return f"TO_TIMESTAMP({self.sql(expression.expressions[0])}, {self.sql(expression.expressions[1])})"
-    elif expression.this.upper() == 'FROM_ISO8601_TIMESTAMP':
+    elif upper_name == 'FROM_ISO8601_TIMESTAMP':
         return f"CAST({self.sql(expression.expressions[0])} AS TIMESTAMP)"
-    elif expression.this.upper() == 'DOW':
+    elif upper_name == 'DOW':
         # dow in presto is an alias of day_of_week, which is equivalent to dayofweek_iso
         # https://prestodb.io/docs/current/functions/datetime.html#day_of_week-x-bigint
         # https://doc.clickzetta.com/en-US/sql_functions/scalar_functions/datetime_functions/dayofweek_iso
         return f"DAYOFWEEK_ISO({self.sql(expression.expressions[0])})"
-    elif expression.this.upper() == 'DOY':
+    elif upper_name == 'DOY':
         return f"DAYOFYEAR({self.sql(expression.expressions[0])})"
-    elif expression.this.upper() == 'YOW' or expression.this.upper() == 'YEAR_OF_WEEK':
+    elif upper_name == 'YOW' or upper_name == 'YEAR_OF_WEEK':
         return f"YEAROFWEEK({self.sql(expression.expressions[0])})"
-    elif expression.this.upper() == 'GROUPING':
+    elif upper_name == 'GROUPING':
         return f"GROUPING_ID({self.expressions(expression, flat=True)})"
-    elif expression.this.upper() == 'MURMUR_HASH3_32':
+    elif upper_name == 'MURMUR_HASH3_32':
         return f"MURMURHASH3_32({self.sql(expression.expressions[0])})"
-
+    elif upper_name == 'GET_JSON_OBJECT':
+        return _build_parse_json_sql(upper_name, self,
+                                     expression.expressions[0],
+                                     expression.expressions[1],
+                                     dialect=dialect)
+    elif 'VISITPARAMEXTRACT' in upper_name or 'JSONEXTRACT' in upper_name or 'SIMPLEJSONEXTRACT' in upper_name:
+        # VISITPARAMEXTRACT is alias of SIMPLEJSONEXTRACT in ClickHouse
+        # The JSONEXTRACT parameters indices_or_keys currently not supported
+        # https://clickhouse.com/docs/en/sql-reference/functions/json-functions#simplejsonextractfloat
+        upper_name_subfix = upper_name.replace('VISITPARAMEXTRACT', '').replace('JSONEXTRACT', '')
+        func_name = "JSON_EXTRACT"
+        if upper_name_subfix == 'BOOL':
+            func_name = "JSON_EXTRACT_BOOLEAN"
+        elif upper_name_subfix == 'INT':
+            func_name = "JSON_EXTRACT_BIGINT"
+        elif upper_name_subfix == 'FLOAT':
+            func_name = "JSON_EXTRACT_DOUBLE"
+        elif upper_name_subfix == 'STRING':
+            func_name = "JSON_EXTRACT_STRING"
+        exprs = expression.expressions
+        extract_sql = _build_parse_json_sql(func_name, self, exprs[0], exprs[1], dialect=dialect)
+        if upper_name_subfix == 'ARRAYRAW':
+            extract_sql = f"{extract_sql}::ARRAY<JSON>"
+        return extract_sql
+    elif upper_name == 'REPLACEALL':
+        return self.func("REPLACE", expression.expressions[0], expression.expressions[1], expression.expressions[2])
+    elif upper_name == 'TOSTARTOFDAY':
+        return f"DATE_TRUNC('DAY', {self.sql(expression.expressions[0])})"
+    elif upper_name == 'TOSTARTOFHOUR':
+        return f"DATE_TRUNC('HOUR', {self.sql(expression.expressions[0])})"
+    elif upper_name == 'TOSTARTOFMINUTE':
+        return f"DATE_TRUNC('MINUTE', {self.sql(expression.expressions[0])})"
+    elif upper_name == 'TOSTARTOFMONTH':
+        return f"DATE_TRUNC('MONTH', {self.sql(expression.expressions[0])})"
+    elif upper_name == 'TOSTARTOFQUARTER':
+        return f"DATE_TRUNC('QUARTER', {self.sql(expression.expressions[0])})"
+    elif upper_name == 'TOSTARTOFSECOND':
+        return f"DATE_TRUNC('SECOND', {self.sql(expression.expressions[0])})"
+    elif upper_name == 'TOSTARTOFWEEK':
+        return f"DATE_TRUNC('WEEK', {self.sql(expression.expressions[0])})"
+    elif upper_name == 'TOSTARTOFYEAR':
+        return f"DATE_TRUNC('YEAR', {self.sql(expression.expressions[0])})"
     # return as it is
-    args = ", ".join(self.sql(e) for e in expression.expressions)
-    return f"{expression.this}({args})"
+    return self.func(expression.this, *expression.expressions)
 
 def nullif_to_if(self: ClickZetta.Generator, expression: exp.Nullif):
     cond = exp.EQ(this=expression.this, expression=expression.expression)
@@ -155,9 +204,14 @@ def unnest_to_explode(
 
 
 def unnest_to_values(self: ClickZetta.Generator, expression: exp.Unnest):
-    if isinstance(expression.expressions, list) and len(expression.expressions) == 1 and isinstance(
-            expression.expressions[0], exp.Array):
-        array = expression.expressions[0].expressions
+    # If the array contains only tuples, the array is treated as a single map column.
+    # https://prestodb.io/docs/current/sql/select.html#unnest
+    exprs = expression.expressions
+    if (isinstance(exprs, list)
+            and len(exprs) == 1
+            and isinstance(exprs[0], exp.Array)
+            and all(isinstance(e, exp.Tuple) for e in exprs[0].expressions)):
+        array = exprs[0].expressions
         alias = expression.args.get('alias')
         ret = exp.Values(expressions=array, alias=alias)
         return self.sql(ret)
@@ -192,7 +246,11 @@ def date_add_sql(self: ClickZetta.Generator, expression: exp.DateAdd) -> str:
         unit_str = f"'{self.sql(unit)}'"
     else:
         unit_str = self.sql(unit)
-    return f"TIMESTAMP_OR_DATE_ADD({unit_str}, {self.sql(expression.expression)}, {self.sql(expression.this)})"
+    # canonicalize INTERVAL values to number literals
+    interval = expression.expression
+    if interval and interval.is_string:
+        interval = exp.Literal.number(interval.this)
+    return f"TIMESTAMP_OR_DATE_ADD({unit_str}, {self.sql(interval)}, {self.sql(expression.this)})"
 
 
 def _transform_group_sql(expression: exp.Expression) -> exp.Expression:
@@ -232,18 +290,37 @@ def _transform_group_sql(expression: exp.Expression) -> exp.Expression:
     return expression
 
 
-def _json_extract(name: str, self: ClickZetta.Generator, e: exp.JSONExtract) -> str:
-    path = e.expression
+def _json_extract(name: str, self: ClickZetta.Generator, expression: exp.JSONExtract | exp.JSONExtractScalar) -> str:
+    return _build_parse_json_sql(name, self, expression.this, expression.expression, expression.expressions)
+
+
+def _build_parse_json_sql(name: str, self: ClickZetta.Generator,
+                          json: exp.Expression, path: exp.Expression, exprs: t.List[exp.Expression] = (),
+                          dialect: str = '') -> str:
+    if not dialect:
+        dialect = self.sql(path.parent_select, "dialect")
+    # If it is not a Literal type but a JsonPath, the $ prefix will be automatically added during translation
     if isinstance(path, exp.Literal) and isinstance(path.this, str):
+        path_str = path.this
+        # The key in Clickhouse's jsonpath contains a dot, not a hierarchical relationship, but a part of the key.
+        # Other dialects do not need special processing
+        if path_str.find('.') != -1 and dialect == 'CLICKHOUSE':
+            path_str = fr"'$[\'{path_str}\']'"
         # If the literal starts with $., use JSON_EXTRACT directly
-        if path.this.startswith('$.'):
-            return self.func(name, e.this, f"'{path.this}'", *e.expressions)
-        return f"{e.this}['{e.expression.this}']"
+        elif path_str.startswith('$.'):
+            path_str = f"'{path_str}'"
+        else:
+            path_str = f"'$.{path_str}'"
     else:
-        return self.func(name, e.this, self.sql(path), *e.expressions)
+        # If it is not a Literal type but a JsonPath, the $ prefix will be automatically added during translation
+        path_str = self.sql(path)
+
+    if name.upper() != "GET_JSON_OBJECT" and isinstance(json, exp.Literal) and json.is_string:
+        return self.func(name, exp.ParseJSON(this=json), path_str, *exprs)
+    return self.func(name, json, path_str, *exprs)
 
 
-def _parse_json(self, e):
+def _parse_json(self, e: exp.ParseJSON) -> str:
     if isinstance(e.this, exp.Literal) and e.this.is_string:
         return f"JSON '{e.this.this}'"
     return self.func("PARSE_JSON", e.this)
@@ -269,8 +346,13 @@ class ClickZetta(Spark):
             "PROPERTIES": lambda self: self._parse_wrapped_properties(),
         }
 
+        def _to_prop_eq(self, expression: exp.Expression, index: int) -> exp.Expression:
+            # ClickZetta does not support add alias for STRUCT function, so we need to directly return the expression
+            # Otherwise, if is useful, we can use to `named_struct` in the future
+            return expression
+
     class Generator(Spark.Generator):
-        RESERVED_KEYWORDS = {'all', 'user', 'to', 'check', 'order'}
+        RESERVED_KEYWORDS = {'all', 'user', 'to', 'check', 'order', 'current_timestamp', 'current_date'}
         WITH_PROPERTIES_PREFIX = "PROPERTIES"
 
         TYPE_MAPPING = {
@@ -314,6 +396,10 @@ class ClickZetta(Spark):
                     unnest_to_explode,
                 ]
             ),
+            exp.Anonymous: _anonymous_func,
+            exp.AnonymousAggFunc: _anonymous_agg_func,
+            exp.CastToStrType: lambda self, e:
+            "CAST({} AS {})".format(self.sql(e, 'this'), self.sql(e, 'to').strip('\'').upper()),
             # in MaxCompute, datetime(col) is an alias of cast(col as datetime)
             exp.Datetime: rename_func("TO_TIMESTAMP"),
             exp.DefaultColumnConstraint: lambda self, e: '',
@@ -325,12 +411,8 @@ class ClickZetta(Spark):
             exp.Create: transforms.preprocess([_transform_create]),
             exp.GroupConcat: _groupconcat_to_wmconcat,
             exp.CurrentTime: lambda self, e: "DATE_FORMAT(NOW(),'HH:mm:ss')",
-            exp.Anonymous: _anonymous_func,
             exp.AtTimeZone: lambda self, e: self.func(
                 "CONVERT_TIMEZONE", e.args.get("zone"), e.this
-            ),
-            exp.UnixToTime: lambda self, e: self.func(
-                "CONVERT_TIMEZONE", "'UTC+0'", e.this
             ),
             exp.EngineProperty: lambda self, e: '',
             exp.Pow: rename_func("POW"),
@@ -347,7 +429,8 @@ class ClickZetta(Spark):
             exp.Group: transforms.preprocess([_transform_group_sql]),
             exp.RegexpLike: rename_func("RLIKE"),
             exp.JSONExtract: lambda self, e: _json_extract("JSON_EXTRACT", self, e),
-            exp.Chr: lambda self, e: f"CHAR({self.sql(exp.cast(e.this, exp.DataType.Type.INT))})",
+            exp.JSONExtractScalar: lambda self, e: _json_extract("JSON_EXTRACT", self, e),
+            exp.Chr: lambda self, e: self.func("CHAR", exp.cast(self.sql(*e.expressions), exp.DataType.Type.INT)),
             exp.ArrayAgg: rename_func("COLLECT_LIST"),
             exp.FromISO8601Timestamp: lambda self, e: f"{self.sql(exp.cast(e.this, exp.DataType.Type.TIMESTAMP))}",
         }
