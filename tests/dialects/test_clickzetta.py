@@ -819,3 +819,11 @@ select j from a""",
                 "starrocks": "SELECT DATE_SUB(current_date(), -1-2)",
             },
         )
+
+    def test_create_auto_increment(self):
+        self.validate_all(
+            "CREATE TABLE test (id INT IDENTITY(1), name STRING)",
+            read={
+                "mysql": "CREATE TABLE test (id INT AUTO_INCREMENT, name STRING)",
+            }
+        )

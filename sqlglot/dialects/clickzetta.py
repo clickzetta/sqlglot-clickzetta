@@ -460,7 +460,7 @@ class ClickZetta(Spark):
             exp.DefaultColumnConstraint: lambda self, e: "",
             exp.DuplicateKeyProperty: lambda self, e: "",
             exp.OnUpdateColumnConstraint: lambda self, e: "",
-            exp.AutoIncrementColumnConstraint: lambda self, e: "",
+            exp.AutoIncrementColumnConstraint: lambda *_: "IDENTITY(1)",
             exp.CollateColumnConstraint: lambda self, e: "",
             exp.CharacterSetColumnConstraint: lambda self, e: "",
             exp.Create: transforms.preprocess([_transform_create]),
