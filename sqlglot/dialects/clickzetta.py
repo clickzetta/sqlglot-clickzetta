@@ -390,6 +390,43 @@ class ClickZetta(Spark):
             "PROPERTIES": lambda self: self._parse_wrapped_properties(),
         }
 
+        def _parse_unique_key_property(self):
+            """Parse UNIQUE KEY syntax as a property."""
+            expressions = self._parse_wrapped_csv(self._parse_id_var, optional=False)
+            return self.expression(exp.UniqueKeyProperty, expressions=expressions)
+
+        def _parse_types(self, check_func=False, schema=False, allow_identifiers=True):
+            """Override to handle BITMAP type."""
+            # Check if current token is BITMAP
+            if self._match_text_seq("BITMAP"):
+                # Map BITMAP to HLLSKETCH internally for consistency
+                return exp.DataType(this=exp.DataType.Type.HLLSKETCH, nested=False)
+            return super()._parse_types(check_func, schema, allow_identifiers)
+
+        def _parse_schema(self, this=None):
+            """Override to handle UNIQUE as a schema-level expression."""
+            schema = super()._parse_schema(this)
+
+            # If schema has UniqueColumnConstraint, convert it to UniqueKeyProperty
+            if schema and hasattr(schema, 'expressions'):
+                # Make a copy of the list to avoid modification during iteration
+                unique_constraints = [e for e in schema.expressions if isinstance(e, exp.UniqueColumnConstraint)]
+                for uc in unique_constraints:
+                    # The UniqueColumnConstraint wraps either a Schema or UniqueKeyProperty
+                    if hasattr(uc, 'this'):
+                        # Remove UniqueColumnConstraint
+                        schema.expressions.remove(uc)
+                        # Extract the UniqueKeyProperty from inside
+                        if isinstance(uc.this, exp.Schema) and hasattr(uc.this, 'expressions'):
+                            # UniqueColumnConstraint(Schema(expressions=[...]))
+                            # We need to create UniqueKeyProperty from the schema's expressions
+                            unique_key = self.expression(exp.UniqueKeyProperty, expressions=uc.this.expressions)
+                            schema.expressions.append(unique_key)
+                        elif isinstance(uc.this, exp.UniqueKeyProperty):
+                            schema.expressions.append(uc.this)
+
+            return schema
+
         def _to_prop_eq(self, expression: exp.Expression, index: int) -> exp.Expression:
             # ClickZetta does not support add alias for STRUCT function, so we need to directly return the expression
             # Otherwise, if is useful, we can use to `named_struct` in the future
@@ -431,6 +468,8 @@ class ClickZetta(Spark):
             exp.DataType.Type.DECIMAL32: "DECIMAL",
             exp.DataType.Type.DECIMAL64: "DECIMAL",
             exp.DataType.Type.DECIMAL128: "DECIMAL",
+            # We map HLLSKETCH to BITMAP for StarRocks/Doris compatibility
+            exp.DataType.Type.HLLSKETCH: "BITMAP",
         }
 
         PROPERTIES_LOCATION = {
@@ -438,6 +477,10 @@ class ClickZetta(Spark):
             exp.PrimaryKey: exp.Properties.Location.POST_NAME,
             exp.EngineProperty: exp.Properties.Location.POST_SCHEMA,
         }
+
+        # Add UniqueKeyProperty location if it exists
+        if hasattr(exp, 'UniqueKeyProperty'):
+            PROPERTIES_LOCATION[exp.UniqueKeyProperty] = exp.Properties.Location.POST_SCHEMA
 
         TRANSFORMS = {
             **Spark.Generator.TRANSFORMS,
@@ -526,6 +569,13 @@ class ClickZetta(Spark):
                     "DistributedByHash without buckets, clickzetta requires a number of buckets"
                 )
             return f"CLUSTERED BY ({expressions}){order} INTO {buckets} BUCKETS"
+
+        def uniquekeyproperty_sql(self, expression: exp.Expression) -> str:
+            """Generate SQL for UniqueKeyProperty."""
+            if hasattr(exp, 'UniqueKeyProperty') and isinstance(expression, exp.UniqueKeyProperty):
+                expressions = self.expressions(expression, key="expressions", flat=True)
+                return f"UNIQUE ({expressions})"
+            return ""
 
         def preprocess(self, expression: exp.Expression) -> exp.Expression:
             """Apply generic preprocessing transformations to a given expression."""
