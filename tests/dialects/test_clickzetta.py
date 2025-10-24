@@ -827,3 +827,17 @@ select j from a""",
                 "mysql": "CREATE TABLE test (id INT AUTO_INCREMENT, name STRING)",
             }
         )
+
+    def test_create_unique_key_with_bitmap(self):
+        """Test UNIQUE KEY syntax and BITMAP data type support from Doris/StarRocks."""
+        # Test simple BITMAP type conversion
+        simple_sql = "CREATE TABLE t (c1 BIGINT, c2 BITMAP NOT NULL) UNIQUE KEY(c1) DISTRIBUTED BY HASH(c1) BUCKETS 10"
+        self.validate_all(
+            "CREATE TABLE t (c1 BIGINT, c2 BITMAP NOT NULL, UNIQUE (c1)) CLUSTERED BY (c1) INTO 10 BUCKETS",
+            read={
+                "doris": simple_sql,
+            },
+            write={
+                "clickzetta": "CREATE TABLE t (c1 BIGINT, c2 BITMAP NOT NULL, UNIQUE (c1)) CLUSTERED BY (c1) INTO 10 BUCKETS",
+            },
+        )

@@ -19,7 +19,7 @@ from sqlglot.parser import Parser
 # https://github.com/tobymao/sqlglot/issues/4345
 # Wait for the issue to be resolved before removing this workaround
 def _build_date_delta_with_interval(
-    expression_class: t.Type[E],
+        expression_class: t.Type[E],
 ) -> t.Callable[[t.List], t.Optional[E]]:
     def _builder(args: t.List) -> t.Optional[E]:
         if len(args) < 2:
@@ -35,6 +35,7 @@ def _build_date_delta_with_interval(
         return expression_class(this=args[0], expression=expression, unit=unit_to_str(interval))
 
     return _builder
+
 
 # Note: This workaround only allows the syntax that has been adapted to the Source Dialect of Clickzetta to be hacked.
 # Anything that can be solved through expression will not be allowed here.
@@ -140,3 +141,97 @@ def _normalize_tuple_comparisons(expression: exp.Expression):
                 right_exprs[i - 1] = exp.Alias(this=right_expr, alias=exp.to_identifier(alias))
             else:
                 right_exprs[i - 1].set("alias", exp.to_identifier(alias))
+
+
+# Add UniqueKeyProperty expression class if it doesn't exist
+if not hasattr(exp, 'UniqueKeyProperty'):
+    class UniqueKeyProperty(exp.Property):
+        arg_types = {"expressions": True}
+
+
+    # Register it in the exp module
+    exp.UniqueKeyProperty = UniqueKeyProperty
+
+# Monkey patch Doris and StarRocks parsers to support UNIQUE KEY and BITMAP
+original_doris_parse_create = Doris.Parser._parse_create
+original_starrocks_parse_create = StarRocks.Parser._parse_create
+
+
+def _parse_unique_key(self):
+    """Parse UNIQUE KEY syntax."""
+    self._match_text_seq("KEY")
+    expressions = self._parse_wrapped_csv(self._parse_id_var, optional=False)
+    return self.expression(exp.UniqueKeyProperty, expressions=expressions)
+
+
+def _patched_doris_parse_create(self):
+    """Patched Doris _parse_create to support UNIQUE KEY and move it to schema."""
+    create = original_doris_parse_create(self)
+
+    # Move UniqueKey from properties to schema (similar to PrimaryKey handling in StarRocks)
+    if isinstance(create, exp.Create) and isinstance(create.this, exp.Schema):
+        props = create.args.get("properties")
+        if props:
+            unique_key = props.find(exp.UniqueKeyProperty)
+            if unique_key:
+                create.this.append("expressions", unique_key.pop())
+
+    return create
+
+
+def _patched_starrocks_parse_create(self):
+    """Patched StarRocks _parse_create to support UNIQUE KEY and move it to schema."""
+    create = original_starrocks_parse_create(self)
+
+    # Move UniqueKey from properties to schema (similar to PrimaryKey handling)
+    if isinstance(create, exp.Create) and isinstance(create.this, exp.Schema):
+        props = create.args.get("properties")
+        if props:
+            unique_key = props.find(exp.UniqueKeyProperty)
+            if unique_key:
+                create.this.append("expressions", unique_key.pop())
+
+    return create
+
+
+# Apply monkey patches
+Doris.Parser._parse_create = _patched_doris_parse_create
+Doris.Parser._parse_unique = _parse_unique_key
+StarRocks.Parser._parse_create = _patched_starrocks_parse_create
+StarRocks.Parser._parse_unique = _parse_unique_key
+
+# Add UNIQUE to PROPERTY_PARSERS for both dialects
+for dialect in [Doris, StarRocks]:
+    if hasattr(dialect.Parser, 'PROPERTY_PARSERS'):
+        dialect.Parser.PROPERTY_PARSERS = {
+            **dialect.Parser.PROPERTY_PARSERS,
+            "UNIQUE": lambda self: self._parse_unique(),
+        }
+
+# Add BITMAP data type support
+# We need to add BITMAP to the DataType.Type enum
+# Since we can't easily extend AutoName enums at runtime, we'll use a workaround
+# by treating BITMAP as a special identifier that gets mapped to a custom type
+
+# Store the original _parse_types method for Doris and StarRocks
+original_doris_parse_types = Doris.Parser._parse_types
+original_starrocks_parse_types = StarRocks.Parser._parse_types
+
+
+def _patched_parse_types(original_method):
+    """Wrap _parse_types to handle BITMAP as a special case."""
+
+    def wrapper(self, check_func=False, schema=False, allow_identifiers=True):
+        # Check if current token is BITMAP (as an identifier)
+        if self._match_text_seq("BITMAP"):
+            # Create a DataType with BITMAP as a custom type
+            # We'll map it to HLLSKETCH type internally since it's similar conceptually
+            return exp.DataType(this=exp.DataType.Type.HLLSKETCH, nested=False)
+        return original_method(self, check_func, schema, allow_identifiers)
+
+    return wrapper
+
+
+# Apply the wrapper to Doris and StarRocks parsers
+Doris.Parser._parse_types = _patched_parse_types(original_doris_parse_types)
+StarRocks.Parser._parse_types = _patched_parse_types(original_starrocks_parse_types)

@@ -10,7 +10,7 @@ def sqlglotrs_version():
 
 
 setup(
-    name="sqlglot",
+    name="sqlglot-clickzetta",
     description="An easily customizable SQL parser and transpiler",
     long_description=open("README.md").read(),
     long_description_content_type="text/markdown",
