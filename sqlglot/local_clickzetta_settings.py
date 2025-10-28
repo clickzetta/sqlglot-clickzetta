@@ -14,6 +14,7 @@ from sqlglot.dialects.starrocks import StarRocks
 from sqlglot.dialects.trino import Trino
 from sqlglot.helper import seq_get
 from sqlglot.parser import Parser
+from sqlglot.tokens import TokenType
 
 
 # https://github.com/tobymao/sqlglot/issues/4345
@@ -235,3 +236,145 @@ def _patched_parse_types(original_method):
 # Apply the wrapper to Doris and StarRocks parsers
 Doris.Parser._parse_types = _patched_parse_types(original_doris_parse_types)
 StarRocks.Parser._parse_types = _patched_parse_types(original_starrocks_parse_types)
+
+
+# Add support for AUTO PARTITION BY RANGE/LIST and PARTITION BY RANGE/LIST in Doris/StarRocks
+# Common function to handle partition parsing logic
+def _create_partition_parser_wrapper(original_method, match_partition_by=False):
+    """Create a wrapper for partition parsing methods.
+
+    This is a generic function used by both _parse_auto_property and _parse_partitioned_by.
+
+    Args:
+        original_method: The original parser method to wrap
+        match_partition_by: If True, match PARTITION BY token first (for _parse_auto_property)
+                          If False, PARTITION BY has already been consumed (for _parse_partitioned_by)
+
+    Handles:
+    - AUTO PARTITION BY RANGE(expr)() - extract expr only
+    - AUTO PARTITION BY LIST(col1, col2, ...)() - extract column list only
+    - PARTITION BY RANGE(expr)(...) - extract expr, skip all partition definitions
+    - PARTITION BY LIST(col1, col2)(...) - extract columns, skip all partition definitions
+
+    Supports all Doris partition definition types:
+    - FIXED RANGE: VALUES [("start"), ("end"))
+    - LESS THAN: VALUES LESS THAN ("value")
+    - BATCH RANGE: FROM (start) TO (end) INTERVAL ...
+    - MULTI RANGE: Multiple FROM...TO clauses
+    - LIST: VALUES IN (...)
+    - NULL partitions
+    """
+    def wrapper(self):
+        # Save current position for potential fallback
+        start_index = self._index
+
+        # Check if this is PARTITION BY (for AUTO PARTITION case)
+        if match_partition_by:
+            if not self._match(TokenType.PARTITION_BY):
+                # Not PARTITION BY - use original method
+                return original_method(self)
+
+        # Look ahead to see if this is RANGE or LIST
+        partition_type = None
+        if self._match(TokenType.RANGE):
+            partition_type = "RANGE"
+        elif self._match(TokenType.LIST):
+            partition_type = "LIST"
+
+        if partition_type:
+            # Parse the partition expression/columns in parentheses
+            # For RANGE: PARTITION BY RANGE(expr) - extract expr
+            # For LIST: PARTITION BY LIST(col1, col2, ...) - extract columns
+            partition_expr = self._parse_wrapped_csv(self._parse_field)
+
+            # Skip any partition definitions that follow
+            # They can be:
+            # 1. (PARTITION p1 VALUES [...), (...)) - FIXED RANGE (left-closed, right-open)
+            # 2. (PARTITION p1 VALUES LESS THAN (...)) - LESS THAN
+            # 3. (FROM (...) TO (...) INTERVAL ...) - BATCH RANGE
+            # 4. (FROM...TO..., FROM...TO..., PARTITION p VALUES [...)) - MULTI RANGE
+            # 5. (PARTITION p1 VALUES IN (...)) - LIST
+            # 6. Empty () for dynamic partitioning
+            #
+            # Special handling for FIXED RANGE notation: VALUES [(...), (...))
+            # The bracket [ with paren ) means left-closed, right-open interval
+            # Example: VALUES [('2017-01-01'), ('2017-02-01'))
+            #   - [              # starts the interval, inner_depth = 0
+            #   - (              # is the start value left, inner_depth += 1
+            #   - '2017-01-01')  # is the first value, inner_depth -= 1
+            #   - ,('2017-02-01') # is the end value
+            #   - )              # closes the interval (matches with [), inner_depth = -1
+            if self._match(TokenType.L_PAREN):
+                outer_depth = 1  # Track outer partition definitions depth
+                inner_depth = -1  # Track depth inside [...) interval
+
+                while outer_depth > 0 and not self._curr is None:
+                    if self._match(TokenType.L_BRACKET):
+                        # Start of left-closed, right-open interval: [
+                        inner_depth = 0  # Now we're in [...) interval, reset to 0
+                    elif self._match(TokenType.R_BRACKET):
+                        # Right bracket in FIXED RANGE - shouldn't happen
+                        pass
+                    elif self._match(TokenType.L_PAREN):
+                        # Left paren - could be:
+                        # 1. Start of value tuple inside [...) like ('2017-01-01')
+                        # 2. Regular nested paren in other partition types
+                        if inner_depth >= 0:
+                            # We're inside a [...) interval, track inner depth
+                            inner_depth += 1
+                        else:
+                            # Regular paren
+                            outer_depth += 1
+                    elif self._match(TokenType.R_PAREN):
+                        # Right paren - need to determine what it closes
+                        if inner_depth > 0:
+                            # This closes a paren inside [...) like the ) in ('2017-01-01')
+                            inner_depth -= 1
+                        elif inner_depth == 0:
+                            # This is the ) that closes [...) interval
+                            # Reset inner_depth to -1 to indicate we're not in interval anymore
+                            inner_depth = -1
+                        else:
+                            # Regular paren, part of outer structure
+                            outer_depth -= 1
+                    else:
+                        self._advance()
+
+            # Return PartitionedByProperty with just the columns/expression
+            # Always wrap in a Schema for consistency with ClickZetta expectations
+            if isinstance(partition_expr, list):
+                # Multiple columns or single column - wrap in a Schema
+                schema = self.expression(exp.Schema, expressions=partition_expr)
+            else:
+                # Single expression - wrap in Schema with single expression
+                schema = self.expression(exp.Schema, expressions=[partition_expr])
+            return self.expression(exp.PartitionedByProperty, this=schema)
+        else:
+            # Not RANGE or LIST - restore position and use original parser
+            self._retreat(start_index)
+            return original_method(self)
+
+    return wrapper
+
+
+# Save original methods
+original_doris_parse_auto_property = Doris.Parser._parse_auto_property
+original_starrocks_parse_auto_property = StarRocks.Parser._parse_auto_property
+original_doris_parse_partitioned_by = Doris.Parser._parse_partitioned_by
+original_starrocks_parse_partitioned_by = StarRocks.Parser._parse_partitioned_by
+
+# Apply the wrapper to _parse_auto_property (with PARTITION BY matching)
+Doris.Parser._parse_auto_property = _create_partition_parser_wrapper(
+    original_doris_parse_auto_property, match_partition_by=True
+)
+StarRocks.Parser._parse_auto_property = _create_partition_parser_wrapper(
+    original_starrocks_parse_auto_property, match_partition_by=True
+)
+
+# Apply the wrapper to _parse_partitioned_by (PARTITION BY already consumed)
+Doris.Parser._parse_partitioned_by = _create_partition_parser_wrapper(
+    original_doris_parse_partitioned_by, match_partition_by=False
+)
+StarRocks.Parser._parse_partitioned_by = _create_partition_parser_wrapper(
+    original_starrocks_parse_partitioned_by, match_partition_by=False
+)
