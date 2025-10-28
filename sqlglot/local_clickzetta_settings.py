@@ -244,6 +244,9 @@ def _create_partition_parser_wrapper(original_method, match_partition_by=False):
     """Create a wrapper for partition parsing methods.
 
     This is a generic function used by both _parse_auto_property and _parse_partitioned_by.
+    doris manual-partitioning: https://doris.apache.org/zh-CN/docs/3.x/table-design/data-partitioning/manual-partitioning
+    doris dynamic-partitioning: https://doris.apache.org/zh-CN/docs/3.x/table-design/data-partitioning/dynamic-partitioning
+    doris auto-partitioning: https://doris.apache.org/zh-CN/docs/3.x/table-design/data-partitioning/auto-partitioning
 
     Args:
         original_method: The original parser method to wrap
