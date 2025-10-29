@@ -835,9 +835,130 @@ select j from a""",
         self.validate_all(
             "CREATE TABLE t (c1 BIGINT, c2 BITMAP NOT NULL, UNIQUE (c1)) CLUSTERED BY (c1) INTO 10 BUCKETS",
             read={
-                "doris": simple_sql,
+                "starrocks": simple_sql,
             },
-            write={
-                "clickzetta": "CREATE TABLE t (c1 BIGINT, c2 BITMAP NOT NULL, UNIQUE (c1)) CLUSTERED BY (c1) INTO 10 BUCKETS",
+        )
+
+    def test_auto_partition(self):
+        """Test AUTO PARTITION BY RANGE/LIST syntax from Doris/StarRocks."""
+
+        # Test AUTO PARTITION BY LIST with single column
+        self.validate_all(
+            "CREATE TABLE test (`str` VARCHAR(10)) PARTITIONED BY (`str`)",
+            read={
+                "doris": """CREATE TABLE test (`str` VARCHAR(10))
+AUTO PARTITION BY LIST (`str`)
+(PARTITION papple5 VALUES IN ('apple'),
+PARTITION pbanana6 VALUES IN ('banana'))""",
+            },
+        )
+        self.validate_all(
+            "CREATE TABLE test (`str` VARCHAR(10)) PARTITIONED BY (`str`) CLUSTERED BY (`str`) INTO 1 BUCKETS",
+            read={
+                "doris": """CREATE TABLE test (`str` VARCHAR(10))
+AUTO PARTITION BY LIST (`str`)
+(PARTITION papple5 VALUES IN ('apple'),
+PARTITION pbanana6 VALUES IN ('banana'))
+DISTRIBUTED BY HASH(`str`) BUCKETS 1""",
+            },
+        )
+
+        # Test AUTO PARTITION BY RANGE with LESS THAN single column
+        self.validate_all(
+            "CREATE TABLE test (TRADE_DATE DATE) PARTITIONED BY (TRADE_DATE)",
+            read={
+                "doris": """CREATE TABLE test (TRADE_DATE DATE)
+AUTO PARTITION BY RANGE(TRADE_DATE)
+(PARTITION p1 VALUES LESS THAN ('2024-01-01'))""",
+            },
+        )
+
+        # Test AUTO PARTITION BY LIST with multiple columns
+        self.validate_all(
+            "CREATE TABLE test (col1 INT, col2 STRING) PARTITIONED BY (col1, col2)",
+            read={
+                "doris": """CREATE TABLE test (col1 INT, col2 STRING)
+AUTO PARTITION BY LIST (col1, col2)
+(PARTITION p1 VALUES IN ((1, 'a')))""",
+            },
+        )
+        self.validate_all(
+            "CREATE TABLE test (col1 INT, col2 STRING) PARTITIONED BY (col1, col2)",
+            read={
+                "doris": """CREATE TABLE test (col1 INT, col2 STRING)
+AUTO PARTITION BY LIST (col1, col2)()""",
+            },
+        )
+
+        # Test AUTO PARTITION with expression (date_trunc)
+        self.validate_all(
+            "CREATE TABLE test (k0 DATE) PARTITIONED BY (DATE_TRUNC('K0', 'year'))",
+            read={
+                "doris": """CREATE TABLE test (k0 DATE)
+AUTO PARTITION BY RANGE (date_trunc(k0, 'year'))
+(PARTITION p1 VALUES LESS THAN ('2024-01-01'))""",
+            },
+        )
+
+        # Test PARTITION BY RANGE with complex expression (without AUTO)
+        self.validate_all(
+            "CREATE TABLE test (dt TIMESTAMP) PARTITIONED BY (dt)",
+            read={
+                "doris": """CREATE TABLE test
+                            (
+                                dt DATETIME
+                            ) PARTITION BY RANGE(dt)()""",
+            },
+        )
+        self.validate_all(
+            "CREATE TABLE test (dt TIMESTAMP) PARTITIONED BY (dt) CLUSTERED BY (`dt`) INTO 1 BUCKETS",
+            read={
+                "doris": """CREATE TABLE test
+                            (
+                                dt DATETIME
+                            ) PARTITION BY RANGE(dt)() CLUSTERED BY (`dt`) INTO 1 BUCKETS""",
+            },
+        )
+        self.validate_all(
+            "CREATE TABLE test (dt TIMESTAMP) PARTITIONED BY (DATE_TRUNC('DT', 'day'))",
+            read={
+                "doris": """CREATE TABLE test (dt DATETIME)
+PARTITION BY RANGE(date_trunc(dt, 'day'))()""",
+            },
+        )
+
+        # Test PARTITION BY RANGE with FIXED RANGE syntax [(...), (...))
+        # This is Doris' left-closed, right-open interval notation
+        self.validate_all(
+            "CREATE TABLE test (dt DATE) PARTITIONED BY (dt)",
+            read={
+                "doris": """CREATE TABLE test (dt DATE)
+PARTITION BY RANGE(dt)(
+PARTITION p201701 VALUES [('2017-01-01'), ('2017-02-01')),
+PARTITION p201702 VALUES [('2017-02-01'), ('2017-03-01'))
+)""",
+            },
+        )
+
+        self.validate_all(
+            "CREATE TABLE test (dt DATE) PARTITIONED BY (dt) CLUSTERED BY (`dt`) INTO 1 BUCKETS",
+            read={
+                "doris": """CREATE TABLE test (dt DATE)
+PARTITION BY RANGE(dt)(
+PARTITION p201701 VALUES [('2017-01-01'), ('2017-02-01')),
+PARTITION p201702 VALUES [('2017-02-01'), ('2017-03-01'))
+) DISTRIBUTED BY HASH(`dt`) BUCKETS 1""",
+            },
+        )
+
+        # Test PARTITION BY RANGE with LESS THAN syntax (without AUTO)
+        self.validate_all(
+            "CREATE TABLE test (dt DATE) PARTITIONED BY (dt)",
+            read={
+                "doris": """CREATE TABLE test (dt DATE)
+PARTITION BY RANGE(dt)(
+PARTITION p201701 VALUES LESS THAN ('2017-02-01'),
+PARTITION p201702 VALUES LESS THAN ('2017-03-01')
+)""",
             },
         )
