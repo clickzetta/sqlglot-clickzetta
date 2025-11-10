@@ -99,12 +99,12 @@ def _anonymous_func(self: ClickZetta.Generator, expression: exp.Anonymous) -> st
     elif upper_name == "DATE_FORMAT_MYSQL":
         if len(expression.expressions) >= 2:
             arg2 = self.sql(expression.expressions[1])
-            if arg2 == "yyyyMMdd" or arg2 == "yyyy-MM-dd" or arg2 == "yyyy-MM-dd HH:mm:ss":
+            if arg2 == "'yyyyMMdd'" or arg2 == "'yyyy-MM-dd'" or arg2 == "'yyyy-MM-dd HH:mm:ss'":
                 return f"DATE_FORMAT({self.sql(expression.expressions[0])}, {self.sql(expression.expressions[1])})"
         return self.func(expression.this, *expression.expressions)
     elif upper_name == "UNIX_TIMESTAMP":
         if len(expression.expressions) >= 2:
-            if dialect in ("doris", "starrocks"):
+            if dialect in ("DORIS", "STARROCKS", "MYSQL"):
                 # The doris unix_timestamp is using mysql dateformat
                 # https://doris.apache.org/zh-CN/docs/4.x/sql-manual/sql-functions/scalar-functions/date-time-functions/unix-timestamp/
                 # First convert MySQL format to Python strftime format

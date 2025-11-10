@@ -247,10 +247,10 @@ PROPERTIES (
             },
         )
         self.validate_all(
-            """SELECT DATE_FORMAT('2009-10-04 22:23:00', 'yyyy-MM-dd HH:mm:ss')""",
-            read={"starrocks": """select DATE_FORMAT('2009-10-04 22:23:00', 'yyyy-MM-dd HH:mm:ss')"""},
+            """SELECT DATE_FORMAT('2009-10-03 22:23:00', 'yyyy-MM-dd HH:mm:ss')""",
+            read={"starrocks": """select DATE_FORMAT('2009-10-03 22:23:00', 'yyyy-MM-dd HH:mm:ss')"""},
             write={
-                "clickzetta": """SELECT DATE_FORMAT(CAST('2009-10-04 22:23:00' AS TIMESTAMP), 'yyyy-MM-dd HH:mm:ss')""",
+                "clickzetta": """SELECT DATE_FORMAT(CAST('2009-10-03 22:23:00' AS TIMESTAMP), 'yyyy-MM-dd HH:mm:ss')""",
             },
         )
         self.validate_all(
