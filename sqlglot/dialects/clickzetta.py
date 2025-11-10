@@ -99,32 +99,27 @@ def _anonymous_func(self: ClickZetta.Generator, expression: exp.Anonymous) -> st
     elif upper_name == "DATE_FORMAT_MYSQL":
         if len(expression.expressions) >= 2:
             arg2 = self.sql(expression.expressions[1])
-            if arg2 == "yyyyMMdd" or "yyyy-MM" in arg2:
+            if arg2 == "yyyyMMdd" or arg2 == "yyyy-MM-dd" or arg2 == "yyyy-MM-dd HH:mm:ss":
                 return f"DATE_FORMAT({self.sql(expression.expressions[0])}, {self.sql(expression.expressions[1])})"
         return self.func(expression.this, *expression.expressions)
     elif upper_name == "UNIX_TIMESTAMP":
-        # The doris unix_timestamp is using mysql dateformat
-        # https://doris.apache.org/zh-CN/docs/4.x/sql-manual/sql-functions/scalar-functions/date-time-functions/unix-timestamp/
-        if len(expression.expressions) == 0:
-            # No arguments - return current timestamp
-            return self.func(expression.this)
-
-        arg1 = expression.expressions[0]
         if len(expression.expressions) >= 2:
-            # First convert MySQL format to Python strftime format
-            mysql_format = self.sql(expression.expressions[1], "this")
-            from sqlglot.time import format_time
-            python_format = format_time(mysql_format, MySQL.TIME_MAPPING, MySQL.TIME_TRIE)
-            # Then convert Python strftime format to ClickZetta format
-            if python_format:
-                clickzetta_format = format_time(python_format, self.dialect.INVERSE_TIME_MAPPING,
-                                               self.dialect.INVERSE_TIME_TRIE)
-                return f"UNIX_TIMESTAMP({self.sql(expression.expressions[0])}, '{clickzetta_format}')"
-            else:
-                # If conversion fails, use the original format
-                return f"UNIX_TIMESTAMP({self.sql(expression.expressions[0])}, {self.sql(expression.expressions[1])})"
-
-        return self.func(expression.this, arg1)
+            if dialect in ("doris", "starrocks"):
+                # The doris unix_timestamp is using mysql dateformat
+                # https://doris.apache.org/zh-CN/docs/4.x/sql-manual/sql-functions/scalar-functions/date-time-functions/unix-timestamp/
+                # First convert MySQL format to Python strftime format
+                mysql_format = self.sql(expression.expressions[1], "this")
+                from sqlglot.time import format_time
+                python_format = format_time(mysql_format, MySQL.TIME_MAPPING, MySQL.TIME_TRIE)
+                # Then convert Python strftime format to ClickZetta format
+                if python_format:
+                    clickzetta_format = format_time(python_format, self.dialect.INVERSE_TIME_MAPPING,
+                                                    self.dialect.INVERSE_TIME_TRIE)
+                    return f"UNIX_TIMESTAMP({self.sql(expression.expressions[0])}, '{clickzetta_format}')"
+                else:
+                    # If conversion fails, use the original format
+                    return self.func(expression.this, *expression.expressions)
+        return self.func(expression.this, *expression.expressions)
     elif upper_name == "DOW":
         # dow in presto is an alias of day_of_week, which is equivalent to dayofweek_iso
         # https://prestodb.io/docs/current/functions/datetime.html#day_of_week-x-bigint
