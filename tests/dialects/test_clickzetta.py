@@ -143,6 +143,112 @@ PROPERTIES (
             },
         )
 
+    def test_inverted_index(self):
+        """Test that Doris/StarRocks inverted indexes are parsed and removed in ClickZetta output.
+
+        Doris/StarRocks support inverted indexes with USING INVERTED PROPERTIES(...),
+        but ClickZetta doesn't support them, so they should be removed during conversion.
+        """
+
+        # Test 1: Inverted index with simple parser property
+        self.validate_all(
+            "CREATE TABLE t (id INT, content STRING)",
+            read={
+                "doris": 'CREATE TABLE t (id INT, content TEXT, INDEX idx_content(content) USING INVERTED PROPERTIES("parser" = "english"))'
+            },
+        )
+
+        # Test 2: Inverted index with multiple properties
+        self.validate_all(
+            "CREATE TABLE t (id INT, text STRING)",
+            read={
+                "doris": '''CREATE TABLE t (
+                    id INT,
+                    text TEXT,
+                    INDEX idx_text(text) USING INVERTED PROPERTIES(
+                        "parser" = "unicode",
+                        "lower_case" = "true",
+                        "ignore_above" = "512"
+                    )
+                )'''
+            },
+        )
+
+        # Test 3: Inverted index with char_filter properties
+        self.validate_all(
+            "CREATE TABLE t (id INT, description STRING)",
+            read={
+                "doris": '''CREATE TABLE t (
+                    id INT,
+                    description TEXT,
+                    INDEX idx_desc(description) USING INVERTED PROPERTIES(
+                        "parser" = "unicode",
+                        "char_filter_type" = "char_replace",
+                        "char_filter_pattern" = "._",
+                        "char_filter_replacement" = " "
+                    )
+                )'''
+            },
+        )
+
+        # Test 4: Inverted index with Chinese parser
+        self.validate_all(
+            "CREATE TABLE t (id INT, chinese_text STRING)",
+            read={
+                "doris": '''CREATE TABLE t (
+                    id INT,
+                    chinese_text TEXT,
+                    INDEX idx_cn(chinese_text) USING INVERTED PROPERTIES(
+                        "parser" = "chinese",
+                        "parser_mode" = "coarse_grained",
+                        "support_phrase" = "true"
+                    )  COMMENT "comment 4"
+                )'''
+            },
+        )
+
+        # Test 5: Multiple inverted indexes in one table
+        self.validate_all(
+            "CREATE TABLE t (id INT, name STRING, description STRING, tags STRING)",
+            read={
+                "doris": '''CREATE TABLE t (
+                    id INT,
+                    name TEXT,
+                    description TEXT,
+                    tags TEXT,
+                    INDEX idx_name(name) USING INVERTED PROPERTIES("parser" = "unicode"),
+                    INDEX idx_desc(description) USING INVERTED PROPERTIES("parser" = "english"),
+                    INDEX idx_tags(tags) USING INVERTED PROPERTIES("parser" = "unicode", "lower_case" = "true")
+                )'''
+            },
+        )
+
+        # Test 6: Complex table with inverted indexes, primary key, and other constraints
+        self.validate_all(
+            "CREATE TABLE articles (id BIGINT, title STRING, content STRING, tags STRING, created_time TIMESTAMP, PRIMARY KEY (id))",
+            read={
+                "doris": '''CREATE TABLE articles (
+                    id BIGINT,
+                    title TEXT,
+                    content TEXT,
+                    tags TEXT,
+                    created_time DATETIME,
+                    PRIMARY KEY (id),
+                    INDEX idx_title(title) USING INVERTED PROPERTIES("parser" = "unicode"),
+                    INDEX idx_content(content) USING INVERTED PROPERTIES(
+                        "parser" = "english",
+                        "support_phrase" = "true"
+                    ),
+                    INDEX idx_tags(tags) USING INVERTED PROPERTIES(
+                        "parser" = "unicode",
+                        "char_filter_type" = "char_replace",
+                        "char_filter_pattern" = ",",
+                        "char_filter_replacement" = " "
+                    )
+                )'''
+            },
+        )
+
     def test_dml(self):
         self.validate_all(
             "INSERT INTO a.b.c (`x`, `y`, `z`) VALUES (1, 'hello', CAST('2024-07-23 15:17:12' AS TIMESTAMP))",

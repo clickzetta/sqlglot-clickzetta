@@ -326,6 +326,138 @@ Doris.Parser._parse_column_def = _patched_parse_column_def_with_aggregation(orig
 StarRocks.Parser._parse_column_def = _patched_parse_column_def_with_aggregation(original_starrocks_parse_column_def)
 
 
+
+# ============================================================================
+# Inverted Index Support for Doris and StarRocks
+# ============================================================================
+# Doris and StarRocks support inverted indexes with the syntax:
+# INDEX idx_name(column) USING INVERTED PROPERTIES("key" = "value", ...)
+#
+# Since ClickZetta doesn't support inverted indexes, we:
+# 1. Parse them in Doris/StarRocks (so no syntax errors)
+# 2. Ignore them when generating ClickZetta SQL (via monkey patch)
+
+# First, extend IndexConstraintOption to support inverted index properties
+# We store all PROPERTIES as a dictionary in a new 'properties' arg
+original_index_option_arg_types = exp.IndexConstraintOption.arg_types.copy()
+exp.IndexConstraintOption.arg_types = {
+    **original_index_option_arg_types,
+    "properties": False,  # Dict of properties for INVERTED index
+}
+
+# Save original _parse_index_constraint methods
+original_doris_parse_index_constraint = Doris.Parser._parse_index_constraint
+original_starrocks_parse_index_constraint = StarRocks.Parser._parse_index_constraint
+
+
+def _patched_parse_index_constraint_with_inverted(original_method):
+    """Wrap _parse_index_constraint to handle USING INVERTED PROPERTIES(...).
+
+    Doris inverted index syntax:
+        INDEX idx_name(column) USING INVERTED PROPERTIES("key" = "value", ...) [COMMENT '...']
+
+    We parse it as a regular IndexColumnConstraint with:
+    - index_type: "INVERTED"
+    - options: contains IndexConstraintOption with properties dict and optional comment
+    """
+    def wrapper(self, kind: t.Optional[str] = None) -> exp.IndexColumnConstraint:
+        # Parse basic index structure: [kind] [INDEX] name (columns) [USING type]
+        if kind:
+            self._match_texts(("INDEX", "KEY"))
+
+        # Parse index name
+        this = self._parse_id_var(any_token=False)
+
+        # Parse indexed columns first (before USING clause for Doris/StarRocks)
+        # MySQL syntax: INDEX name USING type (columns)
+        # Doris syntax: INDEX name (columns) USING type
+        # We support both by checking for parenthesis first
+        if self._match(TokenType.L_PAREN):
+            # Doris-style: parse columns, then USING
+            expressions = self._parse_csv(self._parse_ordered)
+            self._match_r_paren()
+            # Now check for USING clause
+            index_type = self._match(TokenType.USING) and self._advance_any() and self._prev.text
+        else:
+            # MySQL-style: parse USING, then columns
+            index_type = self._match(TokenType.USING) and self._advance_any() and self._prev.text
+            expressions = self._parse_wrapped_csv(self._parse_ordered)
+
+        # Parse options (COMMENT, KEY_BLOCK_SIZE, WITH PARSER, etc.)
+        options = []
+
+        # Check if this is an INVERTED index with PROPERTIES
+        is_inverted = index_type and index_type.upper() == "INVERTED"
+
+        if is_inverted:
+            # Parse PROPERTIES if present
+            if self._match_text_seq("PROPERTIES"):
+                if self._match(TokenType.L_PAREN):
+                    properties = {}
+                    while True:
+                        # Parse "key" = "value"
+                        key_expr = self._parse_string()
+                        if not key_expr:
+                            break
+
+                        # Extract string value from Literal expression
+                        if isinstance(key_expr, exp.Literal):
+                            key = key_expr.this
+                        else:
+                            key = str(key_expr)
+
+                        self._match(TokenType.EQ)
+                        value_expr = self._parse_string()
+                        if value_expr:
+                            # Extract string value from Literal expression
+                            if isinstance(value_expr, exp.Literal):
+                                value = value_expr.this
+                            else:
+                                value = str(value_expr)
+                            properties[key] = value
+
+                        # Check for comma separator
+                        if not self._match(TokenType.COMMA):
+                            break
+
+                    self._match(TokenType.R_PAREN)
+
+                    # Store properties in an IndexConstraintOption
+                    if properties:
+                        opt = exp.IndexConstraintOption(properties=properties)
+                        options.append(opt)
+
+            # Parse COMMENT if present (for inverted indexes)
+            if self._match(TokenType.COMMENT):
+                comment_expr = self._parse_string()
+                if comment_expr:
+                    opt = exp.IndexConstraintOption(comment=comment_expr)
+                    options.append(opt)
+        else:
+            # Not an inverted index - return original parse
+            return original_method(self, kind)
+
+        return self.expression(
+            exp.IndexColumnConstraint,
+            this=this,
+            expressions=expressions,
+            kind=kind,
+            index_type=index_type,
+            options=options,
+        )
+
+    return wrapper
+
+
+# Apply monkey patch to Doris and StarRocks parsers
+Doris.Parser._parse_index_constraint = _patched_parse_index_constraint_with_inverted(
+    original_doris_parse_index_constraint
+)
+StarRocks.Parser._parse_index_constraint = _patched_parse_index_constraint_with_inverted(
+    original_starrocks_parse_index_constraint
+)
+
+
 # Add support for AUTO PARTITION BY RANGE/LIST and PARTITION BY RANGE/LIST in Doris/StarRocks
 # Common function to handle partition parsing logic
 def _create_partition_parser_wrapper(original_method, match_partition_by=False):
