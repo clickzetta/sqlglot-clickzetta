@@ -104,6 +104,30 @@ def _anonymous_func(self: ClickZetta.Generator, expression: exp.Anonymous) -> st
         return f"TO_TIMESTAMP({self.sql(expression.expressions[0])}, {self.sql(expression.expressions[1])})"
     elif upper_name == "FROM_ISO8601_TIMESTAMP":
         return f"CAST({self.sql(expression.expressions[0])} AS TIMESTAMP)"
+    elif upper_name == "DATE_FORMAT_MYSQL":
+        if len(expression.expressions) >= 2:
+            arg2 = self.sql(expression.expressions[1])
+            if arg2 == "'yyyyMMdd'" or arg2 == "'yyyy-MM-dd'" or arg2 == "'yyyy-MM-dd HH:mm:ss'":
+                return f"DATE_FORMAT({self.sql(expression.expressions[0])}, {self.sql(expression.expressions[1])})"
+        return self.func(expression.this, *expression.expressions)
+    elif upper_name == "UNIX_TIMESTAMP":
+        if len(expression.expressions) >= 2:
+            if dialect in ("DORIS", "STARROCKS", "MYSQL"):
+                # The doris unix_timestamp is using mysql dateformat
+                # https://doris.apache.org/zh-CN/docs/4.x/sql-manual/sql-functions/scalar-functions/date-time-functions/unix-timestamp/
+                # First convert MySQL format to Python strftime format
+                mysql_format = self.sql(expression.expressions[1], "this")
+                from sqlglot.time import format_time
+                python_format = format_time(mysql_format, MySQL.TIME_MAPPING, MySQL.TIME_TRIE)
+                # Then convert Python strftime format to ClickZetta format
+                if python_format:
+                    clickzetta_format = format_time(python_format, self.dialect.INVERSE_TIME_MAPPING,
+                                                    self.dialect.INVERSE_TIME_TRIE)
+                    return f"UNIX_TIMESTAMP({self.sql(expression.expressions[0])}, '{clickzetta_format}')"
+                else:
+                    # If conversion fails, use the original format
+                    return self.func(expression.this, *expression.expressions)
+        return self.func(expression.this, *expression.expressions)
     elif upper_name == "DOW":
         # dow in presto is an alias of day_of_week, which is equivalent to dayofweek_iso
         # https://prestodb.io/docs/current/functions/datetime.html#day_of_week-x-bigint
@@ -503,8 +527,11 @@ class ClickZetta(Spark):
             """Override to handle BITMAP type."""
             # Check if current token is BITMAP
             if self._match_text_seq("BITMAP"):
-                # Map BITMAP to HLLSKETCH internally for consistency
-                return exp.DataType(this=exp.DataType.Type.HLLSKETCH, nested=False)
+                if hasattr(exp.DataType.Type, "BITMAP"):
+                    return exp.DataType(this=exp.DataType.Type.BITMAP, nested=False)
+                else:
+                    # Map BITMAP to HLLSKETCH internally for consistency
+                    return exp.DataType(this=exp.DataType.Type.HLLSKETCH, nested=False)
             return super()._parse_types(check_func, schema, allow_identifiers)
 
         def _parse_schema(self, this=None):
@@ -572,8 +599,15 @@ class ClickZetta(Spark):
             exp.DataType.Type.DECIMAL32: "DECIMAL",
             exp.DataType.Type.DECIMAL64: "DECIMAL",
             exp.DataType.Type.DECIMAL128: "DECIMAL",
-            # We map HLLSKETCH to BITMAP for StarRocks/Doris compatibility
-            exp.DataType.Type.HLLSKETCH: "BITMAP",
+            exp.DataType.Type.IPV4: "BINARY",
+            exp.DataType.Type.IPV6: "BINARY",
+            # We map HLLSKETCH to BINARY for StarRocks/Doris compatibility
+            exp.DataType.Type.HLLSKETCH: "BINARY",
+            "BITMAP": "BITMAP",
+            "HLL": "BINARY",
+            "LARGEINT": "BIGINT",
+            "QUANTILE_STATE": "BINARY",
+            "AGG_STATE": "BINARY",
         }
 
 
@@ -671,6 +705,29 @@ class ClickZetta(Spark):
                 exp.DataType.Type.FLOAT,
                 exp.DataType.Type.DOUBLE,
             }:
+            # Check if type_value is an enum or a string
+            if isinstance(type_value, exp.DataType.Type):
+                type_sql = self.TYPE_MAPPING.get(type_value, type_value.value)
+            else:
+                # For string types (like our custom Doris types), check TYPE_MAPPING by string value
+                type_sql = self.TYPE_MAPPING.get(type_value, type_value)
+
+            # Check for Doris-specific type strings that need special handling
+            special_types = {"LARGEINT", "HLL", "QUANTILE_STATE", "AGG_STATE", "BITMAP"}
+
+            if (type_value in exp.DataType.INTEGER_TYPES or
+                (isinstance(type_value, str) and type_value in special_types) or
+                type_value in {
+                    exp.DataType.Type.UTINYINT,
+                    exp.DataType.Type.USMALLINT,
+                    exp.DataType.Type.UMEDIUMINT,
+                    exp.DataType.Type.UINT,
+                    exp.DataType.Type.UINT128,
+                    exp.DataType.Type.UINT256,
+                    exp.DataType.Type.ENUM,
+                    exp.DataType.Type.FLOAT,
+                    exp.DataType.Type.DOUBLE,
+                }):
                 return type_sql
             return super().datatype_sql(expression)
 
