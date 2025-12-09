@@ -3,16 +3,17 @@ from __future__ import annotations
 import logging
 import typing as t
 
-from sqlglot import exp
+from sqlglot import exp, time
 from sqlglot import transforms
 from sqlglot.dialects.dialect import (
     rename_func,
     if_sql, unit_to_str,
-    DATE_ADD_OR_SUB,
+    DATE_ADD_OR_SUB, time_format,
 )
 from sqlglot.dialects.hive import DATE_DELTA_INTERVAL
 from sqlglot.dialects.spark import Spark
 from sqlglot.dialects.mysql import MySQL
+from sqlglot.dialects.hive import Hive
 from sqlglot.tokens import Tokenizer, TokenType
 
 logger = logging.getLogger("sqlglot")
@@ -84,6 +85,14 @@ def _anonymous_func(self: ClickZetta.Generator, expression: exp.Anonymous) -> st
         return f"LAST_DAY({self.sql(expression.expressions[0])})"
     elif upper_name == "TO_ISO8601":
         return f"DATE_FORMAT({self.sql(expression.expressions[0])}, 'yyyy-MM-dd\\'T\\'hh:mm:ss.SSSxxx')"
+    elif upper_name == "FORMAT_DATETIME":
+        current_format = self.sql(expression.expressions[1]).strip("'").strip("\"")
+        common_format = time.format_time(current_format, Hive.TIME_MAPPING, Hive.TIME_TRIE)
+        lakehouse_format = time.format_time(self.sql(common_format), ClickZetta.INVERSE_TIME_MAPPING,
+                                            ClickZetta.INVERSE_TIME_TRIE)
+        return f"DATE_FORMAT({self.sql(expression.expressions[0])}, '{self.sql(lakehouse_format)}')"
+    elif upper_name == "CURDATE":
+        return "CURRENT_DATE()"
     elif upper_name == "MAP_AGG":
         return f"MAP_FROM_ENTRIES(COLLECT_LIST(STRUCT({self.expressions(expression)})))"
     elif upper_name == "JSON_ARRAY_GET":
@@ -320,6 +329,15 @@ def _transform_group_sql(expression: exp.Expression) -> exp.Expression:
 def _json_extract(
     name: str, self: ClickZetta.Generator, expression: exp.JSONExtract | exp.JSONExtractScalar
 ) -> str:
+    # For JSONExtractScalar, use JSON_EXTRACT_STRING with JSON_PARSE
+    if isinstance(expression, exp.JSONExtractScalar):
+        # Always wrap the JSON argument with JSON_PARSE for JSONExtractScalar
+        json_arg = expression.this
+        if not isinstance(json_arg, exp.ParseJSON):
+            json_arg = exp.ParseJSON(this=json_arg)
+        return _build_parse_json_sql(
+            "JSON_EXTRACT_STRING", self, json_arg, expression.expression, expression.expressions
+        )
     return _build_parse_json_sql(
         name, self, expression.this, expression.expression, expression.expressions
     )
@@ -351,8 +369,11 @@ def _build_parse_json_sql(
         # If it is not a Literal type but a JsonPath, the $ prefix will be automatically added during translation
         path_str = self.sql(path)
 
+    # Handle JSON_PARSE wrapping
     if name.upper() != "GET_JSON_OBJECT" and isinstance(json, exp.Literal) and json.is_string:
-        return self.func(name, exp.ParseJSON(this=json), path_str, *exprs)
+        if not isinstance(json, exp.ParseJSON):
+            json = exp.ParseJSON(this=json)
+
     return self.func(name, json, path_str, *exprs)
 
 
@@ -368,6 +389,23 @@ class ClickZetta(Spark):
     # https://github.com/tobymao/sqlglot/issues/4013
     STRICT_JSON_PATH_SYNTAX = False
 
+    # ClickZetta uses Spark 3 style date format patterns
+    # Reference: https://doc.clickzetta.com/
+    TIME_MAPPING = {
+        "yyyy": "%Y",  # 4-digit year
+        "MM": "%m",    # 2-digit month with leading zero
+        "M": "%-m",    # 1 or 2-digit month
+        "dd": "%d",    # 2-digit day with leading zero
+        "d": "%-d",    # 1 or 2-digit day
+        "HH": "%H",    # 2-digit hour (24-hour) with leading zero
+        "H": "%-H",    # 1 or 2-digit hour (24-hour)
+        "mm": "%M",    # 2-digit minute with leading zero
+        "m": "%-M",    # 1 or 2-digit minute
+        "ss": "%S",    # 2-digit second with leading zero
+        "s": "%-S",    # 1 or 2-digit second
+        "SSSS": "%f",
+    }
+
     class Tokenizer(Spark.Tokenizer):
         KEYWORDS = {
             **Tokenizer.KEYWORDS,
@@ -376,6 +414,7 @@ class ClickZetta(Spark):
             "SEPARATOR": TokenType.SEPARATOR,
             "SHOW USER": TokenType.COMMAND,
             "REVOKE": TokenType.COMMAND,
+            "SIGNED": TokenType.BIGINT
         }
 
     class Parser(Spark.Parser):
@@ -472,6 +511,7 @@ class ClickZetta(Spark):
             exp.DataType.Type.HLLSKETCH: "BITMAP",
         }
 
+
         PROPERTIES_LOCATION = {
             **Spark.Generator.PROPERTIES_LOCATION,
             exp.PrimaryKey: exp.Properties.Location.POST_NAME,
@@ -538,8 +578,18 @@ class ClickZetta(Spark):
 
         def datatype_sql(self, expression: exp.DataType) -> str:
             """Remove unsupported type params from int types: eg. int(10) -> int
-            Remove type param from enum series since it will be mapped as STRING."""
+            Remove type param from enum series since it will be mapped as STRING.
+            Map SIGNED to BIGINT."""
             type_value = expression.this
+
+            # Handle SIGNED as a user-defined type (for Presto compatibility)
+            # Check the 'kind' attribute for USERDEFINED types
+            kind = expression.args.get("kind")
+            if kind and isinstance(kind, str) and kind.upper() == "SIGNED":
+                return "BIGINT"
+            if isinstance(type_value, str) and type_value.upper() == "SIGNED":
+                return "BIGINT"
+
             type_sql = (
                 self.TYPE_MAPPING.get(type_value, type_value.value)
                 if isinstance(type_value, exp.DataType.Type)
