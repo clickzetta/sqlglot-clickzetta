@@ -689,22 +689,6 @@ class ClickZetta(Spark):
             if isinstance(type_value, str) and type_value.upper() == "SIGNED":
                 return "BIGINT"
 
-            type_sql = (
-                self.TYPE_MAPPING.get(type_value, type_value.value)
-                if isinstance(type_value, exp.DataType.Type)
-                else type_value
-            )
-            if type_value in exp.DataType.INTEGER_TYPES or type_value in {
-                exp.DataType.Type.UTINYINT,
-                exp.DataType.Type.USMALLINT,
-                exp.DataType.Type.UMEDIUMINT,
-                exp.DataType.Type.UINT,
-                exp.DataType.Type.UINT128,
-                exp.DataType.Type.UINT256,
-                exp.DataType.Type.ENUM,
-                exp.DataType.Type.FLOAT,
-                exp.DataType.Type.DOUBLE,
-            }:
             # Check if type_value is an enum or a string
             if isinstance(type_value, exp.DataType.Type):
                 type_sql = self.TYPE_MAPPING.get(type_value, type_value.value)

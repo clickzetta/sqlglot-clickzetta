@@ -1150,7 +1150,9 @@ PARTITION p201702 VALUES LESS THAN ('2017-03-01')
         self.validate_all(
             "SELECT CAST(mobile AS BIGINT) AS mobile_hash",
             read={"presto": "SELECT CAST(mobile AS SIGNED) AS mobile_hash"},
-            write={"clickzetta": "SELECT CAST(mobile AS BIGINT) AS mobile_hash"},
+            write={"clickzetta": "SELECT CAST(mobile AS BIGINT) AS mobile_hash"}
+        )
+
     def test_aggregate_key(self):
         """Test AGGREGATE KEY syntax from Doris/StarRocks.
 
