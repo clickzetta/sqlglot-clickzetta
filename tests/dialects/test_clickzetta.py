@@ -143,6 +143,112 @@ PROPERTIES (
             },
         )
 
+    def test_inverted_index(self):
+        """Test that Doris/StarRocks inverted indexes are parsed and removed in ClickZetta output.
+
+        Doris/StarRocks support inverted indexes with USING INVERTED PROPERTIES(...),
+        but ClickZetta doesn't support them, so they should be removed during conversion.
+        """
+
+        # Test 1: Inverted index with simple parser property
+        self.validate_all(
+            "CREATE TABLE t (id INT, content STRING)",
+            read={
+                "doris": 'CREATE TABLE t (id INT, content TEXT, INDEX idx_content(content) USING INVERTED PROPERTIES("parser" = "english"))'
+            },
+        )
+
+        # Test 2: Inverted index with multiple properties
+        self.validate_all(
+            "CREATE TABLE t (id INT, text STRING)",
+            read={
+                "doris": '''CREATE TABLE t (
+                    id INT,
+                    text TEXT,
+                    INDEX idx_text(text) USING INVERTED PROPERTIES(
+                        "parser" = "unicode",
+                        "lower_case" = "true",
+                        "ignore_above" = "512"
+                    )
+                )'''
+            },
+        )
+
+        # Test 3: Inverted index with char_filter properties
+        self.validate_all(
+            "CREATE TABLE t (id INT, description STRING)",
+            read={
+                "doris": '''CREATE TABLE t (
+                    id INT,
+                    description TEXT,
+                    INDEX idx_desc(description) USING INVERTED PROPERTIES(
+                        "parser" = "unicode",
+                        "char_filter_type" = "char_replace",
+                        "char_filter_pattern" = "._",
+                        "char_filter_replacement" = " "
+                    )
+                )'''
+            },
+        )
+
+        # Test 4: Inverted index with Chinese parser
+        self.validate_all(
+            "CREATE TABLE t (id INT, chinese_text STRING)",
+            read={
+                "doris": '''CREATE TABLE t (
+                    id INT,
+                    chinese_text TEXT,
+                    INDEX idx_cn(chinese_text) USING INVERTED PROPERTIES(
+                        "parser" = "chinese",
+                        "parser_mode" = "coarse_grained",
+                        "support_phrase" = "true"
+                    )  COMMENT "comment 4"
+                )'''
+            },
+        )
+
+        # Test 5: Multiple inverted indexes in one table
+        self.validate_all(
+            "CREATE TABLE t (id INT, name STRING, description STRING, tags STRING)",
+            read={
+                "doris": '''CREATE TABLE t (
+                    id INT,
+                    name TEXT,
+                    description TEXT,
+                    tags TEXT,
+                    INDEX idx_name(name) USING INVERTED PROPERTIES("parser" = "unicode"),
+                    INDEX idx_desc(description) USING INVERTED PROPERTIES("parser" = "english"),
+                    INDEX idx_tags(tags) USING INVERTED PROPERTIES("parser" = "unicode", "lower_case" = "true")
+                )'''
+            },
+        )
+
+        # Test 6: Complex table with inverted indexes, primary key, and other constraints
+        self.validate_all(
+            "CREATE TABLE articles (id BIGINT, title STRING, content STRING, tags STRING, created_time TIMESTAMP, PRIMARY KEY (id))",
+            read={
+                "doris": '''CREATE TABLE articles (
+                    id BIGINT,
+                    title TEXT,
+                    content TEXT,
+                    tags TEXT,
+                    created_time DATETIME,
+                    PRIMARY KEY (id),
+                    INDEX idx_title(title) USING INVERTED PROPERTIES("parser" = "unicode"),
+                    INDEX idx_content(content) USING INVERTED PROPERTIES(
+                        "parser" = "english",
+                        "support_phrase" = "true"
+                    ),
+                    INDEX idx_tags(tags) USING INVERTED PROPERTIES(
+                        "parser" = "unicode",
+                        "char_filter_type" = "char_replace",
+                        "char_filter_pattern" = ",",
+                        "char_filter_replacement" = " "
+                    )
+                )'''
+            },
+        )
+
     def test_dml(self):
         self.validate_all(
             "INSERT INTO a.b.c (`x`, `y`, `z`) VALUES (1, 'hello', CAST('2024-07-23 15:17:12' AS TIMESTAMP))",
@@ -244,6 +350,20 @@ PROPERTIES (
             read={"postgres": """select to_char(current_timestamp, 'yyyy-"Q"Q')"""},
             write={
                 "clickzetta": """SELECT DATE_FORMAT_PG(CURRENT_TIMESTAMP(), 'yyyy-"Q"Q')""",
+            },
+        )
+        self.validate_all(
+            """SELECT DATE_FORMAT('2009-10-03 22:23:00', 'yyyy-MM-dd HH:mm:ss')""",
+            read={"starrocks": """select DATE_FORMAT('2009-10-03 22:23:00', 'yyyy-MM-dd HH:mm:ss')"""},
+            write={
+                "clickzetta": """SELECT DATE_FORMAT(CAST('2009-10-03 22:23:00' AS TIMESTAMP), 'yyyy-MM-dd HH:mm:ss')""",
+            },
+        )
+        self.validate_all(
+            """SELECT DATE_FORMAT_MYSQL('2009-10-04 22:23:00', '%W %M %Y')""",
+            read={"starrocks": """select DATE_FORMAT('2009-10-04 22:23:00', '%W %M %Y')"""},
+            write={
+                "clickzetta": """SELECT DATE_FORMAT_MYSQL('2009-10-04 22:23:00', '%W %M %Y')""",
             },
         )
         self.validate_all(
@@ -831,11 +951,19 @@ select j from a""",
     def test_create_unique_key_with_bitmap(self):
         """Test UNIQUE KEY syntax and BITMAP data type support from Doris/StarRocks."""
         # Test simple BITMAP type conversion
-        simple_sql = "CREATE TABLE t (c1 BIGINT, c2 BITMAP NOT NULL) UNIQUE KEY(c1) DISTRIBUTED BY HASH(c1) BUCKETS 10"
+        simple_sql = "CREATE TABLE t (c1 BIGINT, c2 BITMAP NOT NULL)"
         self.validate_all(
-            "CREATE TABLE t (c1 BIGINT, c2 BITMAP NOT NULL, UNIQUE (c1)) CLUSTERED BY (c1) INTO 10 BUCKETS",
+            "CREATE TABLE t (c1 BIGINT, c2 BITMAP NOT NULL)",
             read={
-                "starrocks": simple_sql,
+                "doris": simple_sql,
+            },
+        )
+
+        simple_sql = "CREATE TABLE t (c1 BIGINT, c2 QUANTILE_STATE QUANTILE_UNION) UNIQUE KEY(c1) DISTRIBUTED BY HASH(c1) BUCKETS 10"
+        self.validate_all(
+            "CREATE TABLE t (c1 BIGINT, c2 BINARY, UNIQUE (c1)) CLUSTERED BY (c1) INTO 10 BUCKETS",
+            read={
+                "doris": simple_sql,
             },
         )
 
@@ -960,5 +1088,214 @@ PARTITION BY RANGE(dt)(
 PARTITION p201701 VALUES LESS THAN ('2017-02-01'),
 PARTITION p201702 VALUES LESS THAN ('2017-03-01')
 )""",
+            },
+        )
+
+    def test_aggregate_key(self):
+        """Test AGGREGATE KEY syntax from Doris/StarRocks.
+
+        AGGREGATE KEY defines which columns are key columns in an aggregate table model.
+        Value columns can have aggregation types like SUM, REPLACE, MAX, MIN, etc.
+        Since ClickZetta doesn't support this model, we parse but ignore AGGREGATE KEY
+        and strip aggregation type modifiers from columns.
+        """
+
+        # Test simple AGGREGATE KEY
+        self.validate_all(
+            "CREATE TABLE test (id BIGINT NOT NULL, name VARCHAR(20)) CLUSTERED BY (id) INTO 10 BUCKETS",
+            read={
+                "doris": """CREATE TABLE test (
+    id BIGINT NOT NULL,
+    name VARCHAR(20)
+)
+AGGREGATE KEY(id, name)
+DISTRIBUTED BY HASH(id) BUCKETS 10""",
+            },
+        )
+
+        # Test AGGREGATE KEY with SUM aggregation type
+        self.validate_all(
+            "CREATE TABLE test (id BIGINT NOT NULL, cost BIGINT) CLUSTERED BY (id) INTO 10 BUCKETS",
+            read={
+                "doris": """CREATE TABLE test (
+    id BIGINT NOT NULL,
+    cost BIGINT SUM DEFAULT '0'
+)
+AGGREGATE KEY(id)
+DISTRIBUTED BY HASH(id) BUCKETS 10""",
+            },
+        )
+
+        # Test AGGREGATE KEY with multiple aggregation types
+        self.validate_all(
+            "CREATE TABLE test (id BIGINT NOT NULL, cost BIGINT, max_value INT, min_value INT) CLUSTERED BY (id) INTO 10 BUCKETS",
+            read={
+                "doris": """CREATE TABLE test (
+    id BIGINT NOT NULL,
+    cost BIGINT SUM DEFAULT '0',
+    max_value INT MAX DEFAULT '0',
+    min_value INT MIN DEFAULT '0'
+)
+AGGREGATE KEY(id)
+DISTRIBUTED BY HASH(id) BUCKETS 10""",
+            },
+        )
+
+        # Test AGGREGATE KEY with REPLACE aggregation type
+        self.validate_all(
+            "CREATE TABLE test (user_id BIGINT NOT NULL, last_visit TIMESTAMP) CLUSTERED BY (user_id) INTO 10 BUCKETS",
+            read={
+                "doris": """CREATE TABLE test (
+    user_id BIGINT NOT NULL,
+    last_visit DATETIME REPLACE DEFAULT '1970-01-01 00:00:00'
+)
+AGGREGATE KEY(user_id)
+DISTRIBUTED BY HASH(user_id) BUCKETS 10""",
+            },
+        )
+
+        # Test full example with multiple columns and aggregation types
+        self.validate_all(
+            "CREATE TABLE example_tbl_agg (user_id BIGINT NOT NULL, load_dt DATE NOT NULL, city VARCHAR(20), last_visit_dt TIMESTAMP, cost BIGINT, max_dwell INT) CLUSTERED BY (user_id) INTO 10 BUCKETS",
+            read={
+                "doris": """CREATE TABLE example_tbl_agg (
+    user_id BIGINT NOT NULL,
+    load_dt DATE NOT NULL,
+    city VARCHAR(20),
+    last_visit_dt DATETIME REPLACE DEFAULT '1970-01-01 00:00:00',
+    cost BIGINT SUM DEFAULT '0',
+    max_dwell INT MAX DEFAULT '0'
+)
+AGGREGATE KEY(user_id, load_dt, city)
+DISTRIBUTED BY HASH(user_id) BUCKETS 10""",
+            },
+        )
+
+        # Test AGGREGATE KEY without DISTRIBUTED BY
+        self.validate_all(
+            "CREATE TABLE test (id BIGINT NOT NULL, user_id BIGINT NOT NULL, value INT)",
+            read={
+                "doris": """CREATE TABLE test (
+    id BIGINT NOT NULL,
+    user_id BIGINT NOT NULL,
+    value INT SUM
+)
+AGGREGATE KEY(id, user_id)""",
+            },
+        )
+
+    def test_doris_complex_data_types(self):
+        """Test Doris-specific data types conversion to ClickZetta.
+
+        Doris has several unique data types:
+        - LARGEINT: 128-bit signed integer -> BIGINT in ClickZetta
+        - HLL: HyperLogLog for approximate COUNT DISTINCT -> BINARY in ClickZetta
+        - QUANTILE_STATE: For computing approximate quantiles -> BINARY in ClickZetta
+        - AGG_STATE: Generic aggregate function state -> BINARY in ClickZetta
+        - VARIANT: Dynamic type for semi-structured data -> STRING in ClickZetta
+        """
+
+        # Test LARGEINT type conversion
+        self.validate_all(
+            "CREATE TABLE test (id BIGINT NOT NULL, large_val BIGINT)",
+            read={
+                "doris": "CREATE TABLE test (id BIGINT NOT NULL, large_val LARGEINT)",
+            },
+        )
+
+        # Test HLL type conversion (aggregate type)
+        self.validate_all(
+            "CREATE TABLE test (id BIGINT NOT NULL, uv_count BINARY)",
+            read={
+                "doris": "CREATE TABLE test (id BIGINT NOT NULL, uv_count HLL HLL_UNION) AGGREGATE KEY(id)",
+            },
+        )
+
+        # Test QUANTILE_STATE type conversion (aggregate type)
+        self.validate_all(
+            "CREATE TABLE test (id BIGINT NOT NULL, quantile_data BINARY)",
+            read={
+                "doris": "CREATE TABLE test (id BIGINT NOT NULL, quantile_data QUANTILE_STATE QUANTILE_UNION) AGGREGATE KEY(id)",
+            },
+        )
+
+        # Test VARIANT type conversion (semi-structured type)
+        self.validate_all(
+            "CREATE TABLE test (id BIGINT NOT NULL, json_data STRING)",
+            read={
+                "doris": "CREATE TABLE test (id BIGINT NOT NULL, json_data VARIANT)",
+            },
+        )
+
+        # Test multiple Doris-specific types together
+        self.validate_all(
+            "CREATE TABLE test (id BIGINT NOT NULL, large_id BIGINT, uv_count BINARY, dynamic_data STRING) CLUSTERED BY (id) INTO 10 BUCKETS",
+            read={
+                "doris": """CREATE TABLE test (
+    id BIGINT NOT NULL,
+    large_id LARGEINT,
+    uv_count HLL HLL_UNION,
+    dynamic_data VARIANT
+)
+AGGREGATE KEY(id)
+DISTRIBUTED BY HASH(id) BUCKETS 10""",
+            },
+        )
+
+        # Test standard Doris types to ensure they still work
+        self.validate_all(
+            "CREATE TABLE test (id INT NOT NULL, name VARCHAR(100), price DECIMAL(10, 2), created_at TIMESTAMP, is_active BOOLEAN)",
+            read={
+                "doris": "CREATE TABLE test (id INT NOT NULL, name VARCHAR(100), price DECIMAL(10, 2), created_at DATETIME, is_active BOOLEAN)",
+            },
+        )
+
+    def test_unix_timestamp_format_conversion(self):
+        # Test MySQL date format pattern conversion to ClickZetta format
+        self.validate_all(
+            "SELECT UNIX_TIMESTAMP('2007-11-30 10:30:19', 'yyyy-MM-dd HH:mm:ss')",
+            read={
+                "mysql": "SELECT unix_timestamp('2007-11-30 10:30:19', '%Y-%m-%d %H:%i:%s')",
+                "doris": "SELECT unix_timestamp('2007-11-30 10:30:19', '%Y-%m-%d %H:%i:%s')",
+            },
+        )
+
+        # Test with different separators
+        self.validate_all(
+            "SELECT UNIX_TIMESTAMP('2007-11-30 10:30-19', 'yyyy-MM-dd HH:mm-ss')",
+            read={
+                "doris": "SELECT unix_timestamp('2007-11-30 10:30-19', '%Y-%m-%d %H:%i-%s')",
+            },
+        )
+
+        # Test date only
+        self.validate_all(
+            "SELECT UNIX_TIMESTAMP('2007-11-30', 'yyyy-MM-dd')",
+            read={
+                "doris": "SELECT unix_timestamp('2007-11-30', '%Y-%m-%d')",
+            },
+        )
+
+        # Test time only
+        self.validate_all(
+            "SELECT UNIX_TIMESTAMP('10:30:19', 'HH:mm:ss')",
+            read={
+                "doris": "SELECT unix_timestamp('10:30:19', '%H:%i:%s')",
+            },
+        )
+
+        # Test without format parameter
+        self.validate_all(
+            "SELECT UNIX_TIMESTAMP('2007-11-30 10:30:19')",
+            read={
+                "doris": "SELECT unix_timestamp('2007-11-30 10:30:19')",
+            },
+        )
+
+        # Test without any parameters (current timestamp)
+        self.validate_all(
+            "SELECT UNIX_TIMESTAMP()",
+            read={
+                "doris": "SELECT unix_timestamp()",
             },
         )

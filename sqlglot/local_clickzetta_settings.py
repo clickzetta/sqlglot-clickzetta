@@ -145,6 +145,7 @@ def _normalize_tuple_comparisons(expression: exp.Expression):
 
 
 # Add UniqueKeyProperty expression class if it doesn't exist
+# https://doris.apache.org/zh-CN/docs/4.x/table-design/data-model/unique
 if not hasattr(exp, 'UniqueKeyProperty'):
     class UniqueKeyProperty(exp.Property):
         arg_types = {"expressions": True}
@@ -152,6 +153,17 @@ if not hasattr(exp, 'UniqueKeyProperty'):
 
     # Register it in the exp module
     exp.UniqueKeyProperty = UniqueKeyProperty
+
+
+# Add AggregateKeyProperty expression class for Doris AGGREGATE KEY
+# https://doris.apache.org/zh-CN/docs/4.x/table-design/data-model/aggregate
+if not hasattr(exp, 'AggregateKeyProperty'):
+    class AggregateKeyProperty(exp.Property):
+        arg_types = {"expressions": True}
+
+
+    # Register it in the exp module
+    exp.AggregateKeyProperty = AggregateKeyProperty
 
 # Monkey patch Doris and StarRocks parsers to support UNIQUE KEY and BITMAP
 original_doris_parse_create = Doris.Parser._parse_create
@@ -165,32 +177,66 @@ def _parse_unique_key(self):
     return self.expression(exp.UniqueKeyProperty, expressions=expressions)
 
 
+def _parse_aggregate_key(self):
+    """Parse AGGREGATE KEY syntax.
+
+    AGGREGATE KEY is a Doris-specific feature that defines which columns are key columns
+    in an aggregate table model. Value columns can have aggregation types like:
+    SUM, REPLACE, MAX, MIN, REPLACE_IF_NOT_NULL, HLL_UNION, BITMAP_UNION.
+
+    Since ClickZetta doesn't support this, we parse it but will ignore it in the output.
+    """
+    self._match_text_seq("KEY")
+    expressions = self._parse_wrapped_csv(self._parse_id_var, optional=False)
+    return self.expression(exp.AggregateKeyProperty, expressions=expressions)
+
+
 def _patched_doris_parse_create(self):
-    """Patched Doris _parse_create to support UNIQUE KEY and move it to schema."""
+    """Patched Doris _parse_create to support UNIQUE KEY and AGGREGATE KEY.
+
+    - UNIQUE KEY: Move from properties to schema (as constraint)
+    - AGGREGATE KEY: Remove from properties (not supported in ClickZetta)
+    """
     create = original_doris_parse_create(self)
 
-    # Move UniqueKey from properties to schema (similar to PrimaryKey handling in StarRocks)
+    # Process properties
     if isinstance(create, exp.Create) and isinstance(create.this, exp.Schema):
         props = create.args.get("properties")
         if props:
+            # Move UniqueKey from properties to schema (similar to PrimaryKey handling in StarRocks)
             unique_key = props.find(exp.UniqueKeyProperty)
             if unique_key:
                 create.this.append("expressions", unique_key.pop())
+
+            # Remove AggregateKey from properties (not supported in ClickZetta)
+            aggregate_key = props.find(exp.AggregateKeyProperty)
+            if aggregate_key:
+                aggregate_key.pop()  # Just remove it, don't add to schema
 
     return create
 
 
 def _patched_starrocks_parse_create(self):
-    """Patched StarRocks _parse_create to support UNIQUE KEY and move it to schema."""
+    """Patched StarRocks _parse_create to support UNIQUE KEY and AGGREGATE KEY.
+
+    - UNIQUE KEY: Move from properties to schema (as constraint)
+    - AGGREGATE KEY: Remove from properties (not supported in ClickZetta)
+    """
     create = original_starrocks_parse_create(self)
 
-    # Move UniqueKey from properties to schema (similar to PrimaryKey handling)
+    # Process properties
     if isinstance(create, exp.Create) and isinstance(create.this, exp.Schema):
         props = create.args.get("properties")
         if props:
+            # Move UniqueKey from properties to schema (similar to PrimaryKey handling)
             unique_key = props.find(exp.UniqueKeyProperty)
             if unique_key:
                 create.this.append("expressions", unique_key.pop())
+
+            # Remove AggregateKey from properties (not supported in ClickZetta)
+            aggregate_key = props.find(exp.AggregateKeyProperty)
+            if aggregate_key:
+                aggregate_key.pop()  # Just remove it, don't add to schema
 
     return create
 
@@ -198,44 +244,218 @@ def _patched_starrocks_parse_create(self):
 # Apply monkey patches
 Doris.Parser._parse_create = _patched_doris_parse_create
 Doris.Parser._parse_unique = _parse_unique_key
+Doris.Parser._parse_aggregate = _parse_aggregate_key
 StarRocks.Parser._parse_create = _patched_starrocks_parse_create
 StarRocks.Parser._parse_unique = _parse_unique_key
+StarRocks.Parser._parse_aggregate = _parse_aggregate_key
 
-# Add UNIQUE to PROPERTY_PARSERS for both dialects
+# Add UNIQUE and AGGREGATE to PROPERTY_PARSERS for both dialects
 for dialect in [Doris, StarRocks]:
     if hasattr(dialect.Parser, 'PROPERTY_PARSERS'):
         dialect.Parser.PROPERTY_PARSERS = {
             **dialect.Parser.PROPERTY_PARSERS,
             "UNIQUE": lambda self: self._parse_unique(),
+            "AGGREGATE": lambda self: self._parse_aggregate(),
         }
 
-# Add BITMAP data type support
-# We need to add BITMAP to the DataType.Type enum
-# Since we can't easily extend AutoName enums at runtime, we'll use a workaround
-# by treating BITMAP as a special identifier that gets mapped to a custom type
-
-# Store the original _parse_types method for Doris and StarRocks
-original_doris_parse_types = Doris.Parser._parse_types
-original_starrocks_parse_types = StarRocks.Parser._parse_types
+# Apply the wrapper to Doris and StarRocks parsers
+# Doris.Parser._parse_types = _patched_parse_types(original_doris_parse_types)
+# StarRocks.Parser._parse_types = _patched_parse_types(original_starrocks_parse_types)
 
 
-def _patched_parse_types(original_method):
-    """Wrap _parse_types to handle BITMAP as a special case."""
+# Add support for Doris aggregation type modifiers in column definitions
+# In Doris AGGREGATE tables, value columns can have aggregation types like:
+# SUM, REPLACE, MAX, MIN, REPLACE_IF_NOT_NULL, HLL_UNION, BITMAP_UNION
+# These appear after the data type: cost BIGINT SUM DEFAULT '0'
+# We need to skip these keywords by monkey patching _parse_column_def
 
-    def wrapper(self, check_func=False, schema=False, allow_identifiers=True):
-        # Check if current token is BITMAP (as an identifier)
-        if self._match_text_seq("BITMAP"):
-            # Create a DataType with BITMAP as a custom type
-            # We'll map it to HLLSKETCH type internally since it's similar conceptually
-            return exp.DataType(this=exp.DataType.Type.HLLSKETCH, nested=False)
-        return original_method(self, check_func, schema, allow_identifiers)
+# List of Doris aggregation type keywords
+# These keywords appear after the data type in AGGREGATE KEY tables
+DORIS_AGGREGATION_TYPES = {
+    "SUM", "REPLACE", "MAX", "MIN",
+    "REPLACE_IF_NOT_NULL", "HLL_UNION", "BITMAP", "BITMAP_UNION", "QUANTILE_UNION"
+}
+
+# Save original _parse_column_def methods
+original_doris_parse_column_def = Doris.Parser._parse_column_def
+original_starrocks_parse_column_def = StarRocks.Parser._parse_column_def
+
+
+def _patched_parse_column_def_with_aggregation(original_method):
+    """Wrap _parse_column_def to handle Doris aggregation type modifiers.
+
+    After parsing the column type, we check if the next token is an aggregation
+    type modifier (SUM, REPLACE, MAX, etc.) and skip it if present.
+    """
+    def wrapper(self, this):
+        # If this is None, just use the original method
+        # This happens for table-level constraints like PRIMARY KEY
+        if this is None:
+            return original_method(self, this)
+
+        # First, parse the type using the standard method
+        kind = self._parse_types(schema=True)
+
+        # Check if next token is a Doris aggregation type modifier
+        if self._curr and self._curr.text and self._curr.text.upper() in DORIS_AGGREGATION_TYPES:
+            # Skip the aggregation type keyword
+            self._advance()
+
+        # Now parse the rest using the standard constraint parsing
+        # This handles NOT NULL, DEFAULT, COMMENT, etc.
+        constraints = []
+        while True:
+            constraint = self._parse_column_constraint()
+            if not constraint:
+                break
+            constraints.append(constraint)
+
+        # Return the ColumnDef expression
+        return self.expression(
+            exp.ColumnDef,
+            this=this,
+            kind=kind,
+            constraints=constraints if constraints else None
+        )
 
     return wrapper
 
 
-# Apply the wrapper to Doris and StarRocks parsers
-Doris.Parser._parse_types = _patched_parse_types(original_doris_parse_types)
-StarRocks.Parser._parse_types = _patched_parse_types(original_starrocks_parse_types)
+# Apply the patched _parse_column_def
+Doris.Parser._parse_column_def = _patched_parse_column_def_with_aggregation(original_doris_parse_column_def)
+StarRocks.Parser._parse_column_def = _patched_parse_column_def_with_aggregation(original_starrocks_parse_column_def)
+
+
+
+# ============================================================================
+# Inverted Index Support for Doris and StarRocks
+# ============================================================================
+# Doris and StarRocks support inverted indexes with the syntax:
+# INDEX idx_name(column) USING INVERTED PROPERTIES("key" = "value", ...)
+#
+# Since ClickZetta doesn't support inverted indexes, we:
+# 1. Parse them in Doris/StarRocks (so no syntax errors)
+# 2. Ignore them when generating ClickZetta SQL (via monkey patch)
+
+# First, extend IndexConstraintOption to support inverted index properties
+# We store all PROPERTIES as a dictionary in a new 'properties' arg
+original_index_option_arg_types = exp.IndexConstraintOption.arg_types.copy()
+exp.IndexConstraintOption.arg_types = {
+    **original_index_option_arg_types,
+    "properties": False,  # Dict of properties for INVERTED index
+}
+
+# Save original _parse_index_constraint methods
+original_doris_parse_index_constraint = Doris.Parser._parse_index_constraint
+original_starrocks_parse_index_constraint = StarRocks.Parser._parse_index_constraint
+
+
+def _patched_parse_index_constraint_with_inverted(original_method):
+    """Wrap _parse_index_constraint to handle USING INVERTED PROPERTIES(...).
+
+    Doris inverted index syntax:
+        INDEX idx_name(column) USING INVERTED PROPERTIES("key" = "value", ...) [COMMENT '...']
+
+    We parse it as a regular IndexColumnConstraint with:
+    - index_type: "INVERTED"
+    - options: contains IndexConstraintOption with properties dict and optional comment
+    """
+    def wrapper(self, kind: t.Optional[str] = None) -> exp.IndexColumnConstraint:
+        # Parse basic index structure: [kind] [INDEX] name (columns) [USING type]
+        if kind:
+            self._match_texts(("INDEX", "KEY"))
+
+        # Parse index name
+        this = self._parse_id_var(any_token=False)
+
+        # Parse indexed columns first (before USING clause for Doris/StarRocks)
+        # MySQL syntax: INDEX name USING type (columns)
+        # Doris syntax: INDEX name (columns) USING type
+        # We support both by checking for parenthesis first
+        if self._match(TokenType.L_PAREN):
+            # Doris-style: parse columns, then USING
+            expressions = self._parse_csv(self._parse_ordered)
+            self._match_r_paren()
+            # Now check for USING clause
+            index_type = self._match(TokenType.USING) and self._advance_any() and self._prev.text
+        else:
+            # MySQL-style: parse USING, then columns
+            index_type = self._match(TokenType.USING) and self._advance_any() and self._prev.text
+            expressions = self._parse_wrapped_csv(self._parse_ordered)
+
+        # Parse options (COMMENT, KEY_BLOCK_SIZE, WITH PARSER, etc.)
+        options = []
+
+        # Check if this is an INVERTED index with PROPERTIES
+        is_inverted = index_type and index_type.upper() == "INVERTED"
+
+        if is_inverted:
+            # Parse PROPERTIES if present
+            if self._match_text_seq("PROPERTIES"):
+                if self._match(TokenType.L_PAREN):
+                    properties = {}
+                    while True:
+                        # Parse "key" = "value"
+                        key_expr = self._parse_string()
+                        if not key_expr:
+                            break
+
+                        # Extract string value from Literal expression
+                        if isinstance(key_expr, exp.Literal):
+                            key = key_expr.this
+                        else:
+                            key = str(key_expr)
+
+                        self._match(TokenType.EQ)
+                        value_expr = self._parse_string()
+                        if value_expr:
+                            # Extract string value from Literal expression
+                            if isinstance(value_expr, exp.Literal):
+                                value = value_expr.this
+                            else:
+                                value = str(value_expr)
+                            properties[key] = value
+
+                        # Check for comma separator
+                        if not self._match(TokenType.COMMA):
+                            break
+
+                    self._match(TokenType.R_PAREN)
+
+                    # Store properties in an IndexConstraintOption
+                    if properties:
+                        opt = exp.IndexConstraintOption(properties=properties)
+                        options.append(opt)
+
+            # Parse COMMENT if present (for inverted indexes)
+            if self._match(TokenType.COMMENT):
+                comment_expr = self._parse_string()
+                if comment_expr:
+                    opt = exp.IndexConstraintOption(comment=comment_expr)
+                    options.append(opt)
+        else:
+            # Not an inverted index - return original parse
+            return original_method(self, kind)
+
+        return self.expression(
+            exp.IndexColumnConstraint,
+            this=this,
+            expressions=expressions,
+            kind=kind,
+            index_type=index_type,
+            options=options,
+        )
+
+    return wrapper
+
+
+# Apply monkey patch to Doris and StarRocks parsers
+Doris.Parser._parse_index_constraint = _patched_parse_index_constraint_with_inverted(
+    original_doris_parse_index_constraint
+)
+StarRocks.Parser._parse_index_constraint = _patched_parse_index_constraint_with_inverted(
+    original_starrocks_parse_index_constraint
+)
 
 
 # Add support for AUTO PARTITION BY RANGE/LIST and PARTITION BY RANGE/LIST in Doris/StarRocks
@@ -381,3 +601,72 @@ Doris.Parser._parse_partitioned_by = _create_partition_parser_wrapper(
 StarRocks.Parser._parse_partitioned_by = _create_partition_parser_wrapper(
     original_starrocks_parse_partitioned_by, match_partition_by=False
 )
+
+
+# ============================================================================
+# Doris-Specific Data Types
+# ============================================================================
+
+# Add custom data type classes for Doris-specific types that don't exist in SQLGlot
+
+# LARGEINT: 128-bit signed integer (Doris-specific)
+if not hasattr(exp.DataType.Type, 'LARGEINT'):
+    exp.DataType.Type.LARGEINT = "LARGEINT"
+
+# HLL: HyperLogLog type for approximate COUNT DISTINCT (Doris aggregate type)
+if not hasattr(exp.DataType.Type, 'HLL'):
+    exp.DataType.Type.HLL = "HLL"
+
+# QUANTILE_STATE: Type for computing approximate quantiles (Doris aggregate type)
+if not hasattr(exp.DataType.Type, 'QUANTILE_STATE'):
+    exp.DataType.Type.QUANTILE_STATE = "QUANTILE_STATE"
+
+# AGG_STATE: Generic aggregate function state type (Doris aggregate type)
+if not hasattr(exp.DataType.Type, 'AGG_STATE'):
+    exp.DataType.Type.AGG_STATE = "AGG_STATE"
+
+# VARIANT: Dynamic data type for semi-structured data like JSON (Doris-specific)
+if not hasattr(exp.DataType.Type, 'VARIANT'):
+    exp.DataType.Type.VARIANT = "VARIANT"
+
+# BITMAP
+if not hasattr(exp.DataType.Type, 'BITMAP'):
+    exp.DataType.Type.BITMAP = "BITMAP"
+
+
+# Update the Doris Parser's _parse_types method to handle these custom types
+original_doris_parse_types = Doris.Parser._parse_types
+
+def _patched_doris_parse_types(self, check_func=False, schema=False, allow_identifiers=True):
+    """Patched _parse_types to handle Doris-specific types."""
+    # Check if current token is one of our custom Doris types
+    if self._curr:
+        type_text = self._curr.text.upper() if self._curr.text else ""
+
+        # Create DataType with the enum Type value
+        # IMPORTANT: Use exp.DataType.Type enum value, not string!
+        # This ensures TYPE_MAPPING works correctly in generators.
+        if type_text == "LARGEINT":
+            self._advance()
+            return self.expression(exp.DataType, this=exp.DataType.Type.LARGEINT)
+        elif type_text == "HLL":
+            self._advance()
+            return self.expression(exp.DataType, this=exp.DataType.Type.HLL)
+        elif type_text == "QUANTILE_STATE":
+            self._advance()
+            return self.expression(exp.DataType, this=exp.DataType.Type.QUANTILE_STATE)
+        elif type_text == "AGG_STATE":
+            self._advance()
+            return self.expression(exp.DataType, this=exp.DataType.Type.AGG_STATE)
+        elif type_text == "VARIANT":
+            self._advance()
+            return self.expression(exp.DataType, this=exp.DataType.Type.VARIANT)
+        elif type_text == "BITMAP":
+            self._advance()
+            return self.expression(exp.DataType, this=exp.DataType.Type.BITMAP)
+
+    # Fall back to original implementation
+    return original_doris_parse_types(self, check_func=check_func, schema=schema, allow_identifiers=allow_identifiers)
+
+Doris.Parser._parse_types = _patched_doris_parse_types
+StarRocks.Parser._parse_types = _patched_doris_parse_types
