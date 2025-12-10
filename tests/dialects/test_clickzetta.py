@@ -862,6 +862,8 @@ select j from a""",
             "SELECT DATE_TRUNC('HOUR', TIMESTAMP '2022-01-01 12:34:56')",
             "SELECT DATE_TRUNC('MINUTE', TIMESTAMP '2022-01-01 12:34:56')",
             "SELECT DATE_TRUNC('SECOND', TIMESTAMP '2022-01-01 12:34:56')",
+            # presto-dlc transpile to clickzetta need use single quote for date part
+            "SELECT DATE_TRUNC(\"SECOND\", TIMESTAMP '2022-01-01 12:34:56')",
         ]
 
         except_sqls = [
@@ -870,6 +872,7 @@ select j from a""",
             "SELECT DATE_TRUNC('DAY', CAST('2022-01-01' AS DATE))",
             "SELECT DATE_TRUNC('HOUR', CAST('2022-01-01 12:34:56' AS TIMESTAMP))",
             "SELECT DATE_TRUNC('MINUTE', CAST('2022-01-01 12:34:56' AS TIMESTAMP))",
+            "SELECT DATE_TRUNC('SECOND', CAST('2022-01-01 12:34:56' AS TIMESTAMP))",
             "SELECT DATE_TRUNC('SECOND', CAST('2022-01-01 12:34:56' AS TIMESTAMP))",
         ]
 
@@ -1089,6 +1092,65 @@ PARTITION p201701 VALUES LESS THAN ('2017-02-01'),
 PARTITION p201702 VALUES LESS THAN ('2017-03-01')
 )""",
             },
+        )
+
+    def test_presto_syntax_support(self):
+        """Test new Presto-DLC specific syntax support."""
+        # Test format_datetime function
+        self.validate_all(
+            "SELECT DATE_FORMAT(CURRENT_DATE, 'yyyyMMdd')",
+            read={"presto": "SELECT format_datetime(current_date(), 'YYYYMMdd')"},
+            write={"clickzetta": "SELECT DATE_FORMAT(CAST(CURRENT_DATE AS TIMESTAMP), 'yyyyMMdd')"},
+        )
+
+        # Test curdate function
+        self.validate_all(
+            "SELECT CURRENT_DATE()",
+            read={"presto": "SELECT curdate()"},
+            write={"clickzetta": "SELECT CURRENT_DATE"},
+        )
+
+        # Test date_add with 2 parameters (MySQL-like syntax)
+        self.validate_all(
+            "SELECT OrderId, TIMESTAMP_OR_DATE_ADD('DAY', 1, OrderDate) AS OrderPayDate FROM Orders",
+            read={"presto": "SELECT OrderId, DATE_ADD(OrderDate, 1) AS OrderPayDate FROM Orders"},
+            write={"clickzetta": "SELECT OrderId, TIMESTAMP_OR_DATE_ADD('DAY', 1, OrderDate) AS OrderPayDate FROM Orders"},
+        )
+
+        # Test date_add with 3 parameters (standard Presto syntax)
+        self.validate_all(
+            "SELECT TIMESTAMP_OR_DATE_ADD('DAY', 1, CURRENT_DATE)",
+            read={"presto": "SELECT date_add('day', 1, current_date())"},
+            write={"clickzetta": "SELECT TIMESTAMP_OR_DATE_ADD('DAY', 1, CURRENT_DATE)"},
+        )
+
+        # Test complex nested date_add and format_datetime
+        self.validate_all(
+            "SELECT TIMESTAMP_OR_DATE_ADD('DAY', 364, DATE_FORMAT(TIMESTAMP_OR_DATE_ADD('DAY', 1, CURRENT_DATE), 'yyyyMMdd'))",
+            read={"presto": "SELECT date_add(format_datetime(date_add(current_date(), 1), 'yyyyMMdd'), 364)"},
+            write={"clickzetta": "SELECT TIMESTAMP_OR_DATE_ADD('DAY', 364, DATE_FORMAT(CAST(TIMESTAMP_OR_DATE_ADD('DAY', 1, CURRENT_DATE) AS TIMESTAMP), 'yyyyMMdd'))"},
+        )
+
+        # Test json_extract_scalar to json_extract_string with json_parse
+        self.validate_all(
+            """SELECT JSON_EXTRACT_STRING(JSON '{"a": {"b": {"c": "d"}}}', '$.a.b.c') AS extracted_value""",
+            read={"presto": """SELECT json_extract_scalar('{"a": {"b": {"c": "d"}}}', '$.a.b.c') AS extracted_value"""},
+            write={"clickzetta": """SELECT JSON_EXTRACT_STRING(JSON '{"a": {"b": {"c": "d"}}}', '$.a.b.c') AS extracted_value"""},
+        )
+
+        # Test truncate function conversion to truncate_presto
+        self.validate_all(
+            "SELECT TRUNCATE_PRESTO(123.456)",
+            read={"presto": "SELECT truncate(123.456)"},
+            write={"clickzetta": "SELECT TRUNCATE_PRESTO(123.456)"},
+        )
+
+        # Test SIGNED type conversion to BIGINT (Presto->ClickZetta)
+        # We only test read direction since Presto converts CAST to TRY_CAST in write
+        self.validate_all(
+            "SELECT CAST(mobile AS BIGINT) AS mobile_hash",
+            read={"presto": "SELECT CAST(mobile AS SIGNED) AS mobile_hash"},
+            write={"clickzetta": "SELECT CAST(mobile AS BIGINT) AS mobile_hash"}
         )
 
     def test_aggregate_key(self):

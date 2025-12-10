@@ -40,6 +40,30 @@ def _build_date_delta_with_interval(
 
 # Note: This workaround only allows the syntax that has been adapted to the Source Dialect of Clickzetta to be hacked.
 # Anything that can be solved through expression will not be allowed here.
+def _presto_date_add_parser(args: t.List) -> exp.DateAdd:
+    """Support both 2-arg and 3-arg versions of date_add for presto-dlc.
+
+    2-arg version (like MySQL): date_add(date, days)
+    3-arg version (standard Presto): date_add(unit, amount, date)
+    """
+    if len(args) == 2:
+        # 2-arg version: date_add(date, days) - assume unit is DAY
+        return exp.DateAdd(
+            this=args[0],
+            expression=args[1],
+            unit=exp.Var(this="DAY")
+        )
+    elif len(args) == 3:
+        # 3-arg version: date_add(unit, amount, date)
+        return exp.DateAdd(
+            this=args[2],
+            expression=args[1],
+            unit=args[0]
+        )
+    else:
+        # Fallback for unexpected arg counts
+        return None
+
 for dialect in [MySQL, Presto, Trino, Athena, StarRocks, Doris]:
     dialect.Parser.FUNCTIONS["DATE_FORMAT"] = lambda args: exp.Anonymous(
         this="DATE_FORMAT_MYSQL", expressions=args
@@ -49,6 +73,14 @@ for dialect in [MySQL, Presto, Trino, Athena, StarRocks, Doris]:
     )
     dialect.Parser.FUNCTIONS["AES_ENCRYPT"] = lambda args: exp.Anonymous(
         this="AES_ENCRYPT_MYSQL", expressions=args
+    )
+
+# Override date_add for Presto-based dialects to support both 2 and 3 parameters
+for dialect in [Presto, Trino, Athena]:
+    dialect.Parser.FUNCTIONS["DATE_ADD"] = _presto_date_add_parser
+    # Convert Presto's TRUNCATE to TRUNCATE_PRESTO to distinguish from ClickZetta's TRUNCATE
+    dialect.Parser.FUNCTIONS["TRUNCATE"] = lambda args: exp.Anonymous(
+        this="TRUNCATE_PRESTO", expressions=args
     )
 
 ClickHouse.Parser.FUNCTIONS["FORMATDATETIME"] = lambda args: exp.Anonymous(

@@ -3,16 +3,16 @@ from __future__ import annotations
 import logging
 import typing as t
 
-from sqlglot import exp
+from sqlglot import exp, time
 from sqlglot import transforms
 from sqlglot.dialects.dialect import (
     rename_func,
     if_sql, unit_to_str,
-    DATE_ADD_OR_SUB,
-)
+    DATE_ADD_OR_SUB)
 from sqlglot.dialects.hive import DATE_DELTA_INTERVAL
-from sqlglot.dialects.spark import Spark
+from sqlglot.dialects.hive import Hive
 from sqlglot.dialects.mysql import MySQL
+from sqlglot.dialects.spark import Spark
 from sqlglot.tokens import Tokenizer, TokenType
 
 logger = logging.getLogger("sqlglot")
@@ -84,6 +84,14 @@ def _anonymous_func(self: ClickZetta.Generator, expression: exp.Anonymous) -> st
         return f"LAST_DAY({self.sql(expression.expressions[0])})"
     elif upper_name == "TO_ISO8601":
         return f"DATE_FORMAT({self.sql(expression.expressions[0])}, 'yyyy-MM-dd\\'T\\'hh:mm:ss.SSSxxx')"
+    elif upper_name == "FORMAT_DATETIME":
+        current_format = self.sql(expression.expressions[1]).strip("'").strip("\"")
+        common_format = time.format_time(current_format, Hive.TIME_MAPPING, Hive.TIME_TRIE)
+        lakehouse_format = time.format_time(self.sql(common_format), ClickZetta.INVERSE_TIME_MAPPING,
+                                            ClickZetta.INVERSE_TIME_TRIE)
+        return f"DATE_FORMAT({self.sql(expression.expressions[0])}, '{self.sql(lakehouse_format)}')"
+    elif upper_name == "CURDATE":
+        return "CURRENT_DATE()"
     elif upper_name == "MAP_AGG":
         return f"MAP_FROM_ENTRIES(COLLECT_LIST(STRUCT({self.expressions(expression)})))"
     elif upper_name == "JSON_ARRAY_GET":
@@ -344,6 +352,15 @@ def _transform_group_sql(expression: exp.Expression) -> exp.Expression:
 def _json_extract(
     name: str, self: ClickZetta.Generator, expression: exp.JSONExtract | exp.JSONExtractScalar
 ) -> str:
+    # For JSONExtractScalar, use JSON_EXTRACT_STRING with JSON_PARSE
+    if isinstance(expression, exp.JSONExtractScalar):
+        # Always wrap the JSON argument with JSON_PARSE for JSONExtractScalar
+        json_arg = expression.this
+        if not isinstance(json_arg, exp.ParseJSON):
+            json_arg = exp.ParseJSON(this=json_arg)
+        return _build_parse_json_sql(
+            "JSON_EXTRACT_STRING", self, json_arg, expression.expression, expression.expressions
+        )
     return _build_parse_json_sql(
         name, self, expression.this, expression.expression, expression.expressions
     )
@@ -375,8 +392,11 @@ def _build_parse_json_sql(
         # If it is not a Literal type but a JsonPath, the $ prefix will be automatically added during translation
         path_str = self.sql(path)
 
+    # Handle JSON_PARSE wrapping
     if name.upper() != "GET_JSON_OBJECT" and isinstance(json, exp.Literal) and json.is_string:
-        return self.func(name, exp.ParseJSON(this=json), path_str, *exprs)
+        if not isinstance(json, exp.ParseJSON):
+            json = exp.ParseJSON(this=json)
+
     return self.func(name, json, path_str, *exprs)
 
 
@@ -392,6 +412,89 @@ class ClickZetta(Spark):
     # https://github.com/tobymao/sqlglot/issues/4013
     STRICT_JSON_PATH_SYNTAX = False
 
+    # ClickZetta date format patterns based on DateTimeFormatter
+    # Reference: https://yunqi.tech/documents/sql_functions/scalar_functions/datetime_functions/datetime_patterns
+    TIME_MAPPING = {
+        # Year
+        "yyyy": "%Y",  # 4-digit year (e.g., 2020)
+        "yy": "%y",    # 2-digit year (e.g., 20)
+
+        # Month
+        "MMMM": "%B",  # Full month name (e.g., July)
+        "MMM": "%b",   # Abbreviated month name (e.g., Jul)
+        "MM": "%m",    # 2-digit month (e.g., 07)
+        "M": "%-m",    # month without leading zero (e.g., 7)
+
+        # Day of month
+        "dd": "%d",    # 2-digit day (e.g., 28)
+        "d": "%-d",    # day without leading zero (e.g., 5)
+
+        # Day of year
+        "DD": "%j",    # day of year
+        "D": "%-j",    # day of year without leading zero
+
+        # Quarter
+        "QQQQ": "Q%q", # Quarter with text (e.g., 3rd quarter)
+        "QQQ": "Q%q",  # Quarter with Q prefix (e.g., Q3)
+        "QQ": "%q",    # 2-digit quarter (e.g., 03)
+        "Q": "%q",     # quarter (e.g., 3)
+
+        # Hour (24-hour)
+        "HH": "%H",    # 2-digit hour 0-23 (e.g., 00)
+        "H": "%-H",    # hour 0-23 without leading zero (e.g., 0)
+
+        # Hour (12-hour)
+        "hh": "%I",    # 2-digit hour 1-12 (e.g., 12)
+        "h": "%-I",    # hour 1-12 without leading zero (e.g., 12)
+
+        # Minute
+        "mm": "%M",    # 2-digit minute (e.g., 30)
+        "m": "%-M",    # minute without leading zero (e.g., 5)
+
+        # Second
+        "ss": "%S",    # 2-digit second (e.g., 55)
+        "s": "%-S",    # second without leading zero (e.g., 5)
+
+        # Fraction of second
+        "SSSSSS": "%f", # microseconds
+        "SSS": "%L",    # milliseconds
+        "S": "%L",      # fraction of second
+
+        # AM/PM
+        "a": "%p",     # AM/PM marker
+
+        # Week day
+        "EEEE": "%A",  # Full weekday name (e.g., Monday)
+        "EEE": "%a",   # Abbreviated weekday name (e.g., Mon)
+        "EE": "%a",    # Abbreviated weekday name
+        "E": "%a",     # Abbreviated weekday name
+
+        # Time zone
+        "VV": "%Z",    # Time zone ID (e.g., America/Los_Angeles)
+        "V": "%Z",     # Time zone ID
+        "zzzz": "%Z",  # Time zone name (e.g., Pacific Standard Time)
+        "zzz": "%Z",   # Time zone name (e.g., PST)
+        "zz": "%Z",    # Time zone name
+        "z": "%Z",     # Time zone name
+        "OOOO": "%z",  # Localized zone offset (e.g., GMT+08:00)
+        "O": "%z",     # Localized zone offset (e.g., GMT+8)
+        "XXXXX": "%z", # Zone offset with seconds (e.g., -08:30:15)
+        "XXXX": "%z",  # Zone offset (e.g., -08:30)
+        "XXX": "%z",   # Zone offset (e.g., -08:30)
+        "XX": "%z",    # Zone offset (e.g., -0830)
+        "X": "%z",     # Zone offset (e.g., -08)
+        "xxxxx": "%z", # Zone offset with seconds
+        "xxxx": "%z",  # Zone offset
+        "xxx": "%z",   # Zone offset
+        "xx": "%z",    # Zone offset
+        "x": "%z",     # Zone offset
+        "ZZZZZ": "%z", # Zone offset (e.g., -08:30:15)
+        "ZZZZ": "%z",  # Zone offset (e.g., -08:00)
+        "ZZZ": "%z",   # Zone offset (e.g., -08:00)
+        "ZZ": "%z",    # Zone offset (e.g., -0800)
+        "Z": "%z",     # Zone offset (e.g., +0000)
+    }
+
     class Tokenizer(Spark.Tokenizer):
         KEYWORDS = {
             **Tokenizer.KEYWORDS,
@@ -400,6 +503,7 @@ class ClickZetta(Spark):
             "SEPARATOR": TokenType.SEPARATOR,
             "SHOW USER": TokenType.COMMAND,
             "REVOKE": TokenType.COMMAND,
+            "SIGNED": TokenType.BIGINT
         }
 
     class Parser(Spark.Parser):
@@ -506,6 +610,7 @@ class ClickZetta(Spark):
             "AGG_STATE": "BINARY",
         }
 
+
         PROPERTIES_LOCATION = {
             **Spark.Generator.PROPERTIES_LOCATION,
             exp.PrimaryKey: exp.Properties.Location.POST_NAME,
@@ -572,8 +677,17 @@ class ClickZetta(Spark):
 
         def datatype_sql(self, expression: exp.DataType) -> str:
             """Remove unsupported type params from int types: eg. int(10) -> int
-            Remove type param from enum series since it will be mapped as STRING."""
+            Remove type param from enum series since it will be mapped as STRING.
+            Map SIGNED to BIGINT."""
             type_value = expression.this
+
+            # Handle SIGNED as a user-defined type (for Presto compatibility)
+            # Check the 'kind' attribute for USERDEFINED types
+            kind = expression.args.get("kind")
+            if kind and isinstance(kind, str) and kind.upper() == "SIGNED":
+                return "BIGINT"
+            if isinstance(type_value, str) and type_value.upper() == "SIGNED":
+                return "BIGINT"
 
             # Check if type_value is an enum or a string
             if isinstance(type_value, exp.DataType.Type):
