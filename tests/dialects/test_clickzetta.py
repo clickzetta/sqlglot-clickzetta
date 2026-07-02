@@ -1361,3 +1361,31 @@ DISTRIBUTED BY HASH(id) BUCKETS 10""",
                 "doris": "SELECT unix_timestamp()",
             },
         )
+
+    def test_unicode_escape_in_string(self):
+        # SHOW CREATE TABLE 返回的视图 SQL 里 ​ 是字面反斜杠转义写法。
+        # databricks/spark 语义里 \uXXXX 是 unicode 转义,应还原成真实字符,
+        # 而不是把反斜杠翻倍成 \\u200B(否则字符串语义被破坏)。
+        zwsp = "​"  # 真实的零宽空格字符
+        self.validate_all(
+            f"SELECT 'a{zwsp}b' AS col",
+            read={
+                "databricks": "SELECT 'a\\u200Bb' AS col",
+                "spark": "SELECT 'a\\u200Bb' AS col",
+            },
+        )
+        # 32 位 \UXXXXXXXX 形式(emoji)
+        emoji = "\U0001F600"
+        self.validate_all(
+            f"SELECT '{emoji}' AS col",
+            read={
+                "databricks": "SELECT '\\U0001F600' AS col",
+            },
+        )
+        # 普通反斜杠(非 unicode 转义)保持原样翻倍语义不变
+        self.validate_all(
+            "SELECT 'C:\\\\temp' AS col",
+            read={
+                "databricks": "SELECT 'C:\\\\temp' AS col",
+            },
+        )
