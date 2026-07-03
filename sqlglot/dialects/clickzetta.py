@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import logging
-import re
 import typing as t
 
 from sqlglot import exp, time
@@ -22,21 +21,6 @@ try:
     from sqlglot import local_clickzetta_settings
 except ImportError as e:
     logger.error(f"Failed to import local_clickzetta_settings, reason: {e}")
-
-
-# \uXXXX(16 位)和 \UXXXXXXXX(32 位)unicode 转义。
-# databricks/spark 的 tokenizer 不识别 \u,会把反斜杠原样留进 AST,
-# 生成阶段再被无条件翻倍成 \\u200B,破坏字符串语义。这里在写出 ClickZetta
-# 之前先把这些序列解码成真实字符,与 \n \t 等已支持的转义处理保持一致。
-_UNICODE_ESCAPE_RE = re.compile(r"\\u([0-9A-Fa-f]{4})|\\U([0-9A-Fa-f]{8})")
-
-
-def _decode_unicode_escapes(text: str) -> str:
-    def repl(match: re.Match) -> str:
-        hex_code = match.group(1) or match.group(2)
-        return chr(int(hex_code, 16))
-
-    return _UNICODE_ESCAPE_RE.sub(repl, text)
 
 
 def _anonymous_agg_func(self: ClickZetta.Generator, expression: exp.AnonymousAggFunc) -> str:
@@ -760,8 +744,3 @@ class ClickZetta(Spark):
                 expression = ensure_bools(expression)
 
             return expression
-
-        def escape_str(self, text: str, escape_backslash: bool = True) -> str:
-            return super().escape_str(
-                _decode_unicode_escapes(text), escape_backslash=escape_backslash
-            )
