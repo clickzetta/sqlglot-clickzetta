@@ -8,9 +8,17 @@ from sqlglot.dialects.dialect import (
     rename_func,
     if_sql, unit_to_str,
     DATE_ADD_OR_SUB)
+from sqlglot.dialects.athena import Athena
+from sqlglot.dialects.clickhouse import ClickHouse
+from sqlglot.dialects.doris import Doris
 from sqlglot.dialects.hive import Hive
 from sqlglot.dialects.mysql import MySQL
+from sqlglot.dialects.postgres import Postgres
+from sqlglot.dialects.presto import Presto
+from sqlglot.dialects.redshift import Redshift
 from sqlglot.dialects.spark import Spark
+from sqlglot.dialects.starrocks import StarRocks
+from sqlglot.dialects.trino import Trino
 from sqlglot.helper import seq_get
 from sqlglot.tokens import Tokenizer, TokenType
 
@@ -25,6 +33,23 @@ DATE_DELTA_INTERVAL = {
     "WEEK": ("DATE_ADD", 7),
     "DAY": ("DATE_ADD", 1),
 }
+
+# Source-dialect stamps (set by sqlglot_clickzetta.compat) and the dialect
+# classes they refer to. Function routing to compatibility builtins keys on
+# these — see _anonymous_func and _time_to_str_sql.
+STAMP_TO_DIALECT = {
+    "MYSQL": MySQL,
+    "PRESTO": Presto,
+    "TRINO": Trino,
+    "ATHENA": Athena,
+    "STARROCKS": StarRocks,
+    "DORIS": Doris,
+    "POSTGRES": Postgres,
+    "REDSHIFT": Redshift,
+    "CLICKHOUSE": ClickHouse,
+}
+MYSQL_FAMILY_STAMPS = ("MYSQL", "PRESTO", "TRINO", "ATHENA", "STARROCKS", "DORIS")
+PRESTO_FAMILY_STAMPS = ("PRESTO", "TRINO", "ATHENA")
 
 
 def _anonymous_agg_func(self: ClickZetta.Generator, expression: exp.AnonymousAggFunc) -> str:
@@ -82,7 +107,28 @@ def _string_agg_sql(self: ClickZetta.Generator, expression: exp.GroupConcat) -> 
 def _anonymous_func(self: ClickZetta.Generator, expression: exp.Anonymous) -> str:
     dialect = self.sql(expression.parent_select, "dialect")
     upper_name = expression.this.upper()
-    if upper_name == "GETDATE":
+    if upper_name in ("AES_DECRYPT", "AES_ENCRYPT") and dialect in MYSQL_FAMILY_STAMPS:
+        # ClickZetta's engine ships MySQL-flavored compatibility builtins
+        return self.func(f"{upper_name}_MYSQL", *expression.expressions)
+    elif upper_name == "FROMUNIXTIMESTAMP64MILLI" and dialect == "CLICKHOUSE":
+        return self.sql(
+            exp.UnixToTime(
+                this=expression.expressions[0],
+                zone=expression.expressions[1] if len(expression.expressions) == 2 else None,
+                scale=exp.UnixToTime.MILLIS,
+            )
+        )
+    elif upper_name == "TODATETIME" and dialect == "CLICKHOUSE":
+        # toDateTime(expr[, tz]) accepts String/Int/Date/DateTime — cast covers all
+        return self.sql(exp.cast(expression.expressions[0], exp.DataType.Type.DATETIME))
+    elif upper_name == "TODATE" and dialect == "CLICKHOUSE":
+        return self.sql(exp.cast(expression.expressions[0], exp.DataType.Type.DATE))
+    elif upper_name in ("VISITPARAMEXTRACTRAW", "SIMPLEJSONEXTRACTRAW", "JSONEXTRACTRAW"):
+        # The *RAW extractors return unparsed JSON — GET_JSON_OBJECT semantics
+        return _build_parse_json_sql(
+            "GET_JSON_OBJECT", self, expression.expressions[0], expression.expressions[1], dialect=dialect
+        )
+    elif upper_name == "GETDATE":
         return "CURRENT_TIMESTAMP()"
     elif upper_name == "LAST_DAY_OF_MONTH":
         return f"LAST_DAY({self.sql(expression.expressions[0])})"
@@ -426,18 +472,62 @@ def _yearofweek_sql(self: ClickZetta.Generator, e: exp.YearOfWeek) -> str:
     return self.func("YEAROFWEEK", e.this)
 
 
+def _trunc_sql(self: ClickZetta.Generator, e: exp.Trunc) -> str:
+    dialect = self.sql(e.parent_select, "dialect")
+    if dialect in PRESTO_FAMILY_STAMPS:
+        decimals = e.args.get("decimals")
+        if decimals is not None:
+            return self.func("TRUNCATE_PRESTO", e.this, decimals)
+        return self.func("TRUNCATE_PRESTO", e.this)
+    # inherited default: truncate-to-integer via CAST
+    return self.sql(exp.cast(e.this, exp.DataType.Type.BIGINT))
+
+
 def _time_to_str_sql(self: ClickZetta.Generator, e: exp.TimeToStr) -> str:
-    # v23 wrapped the first DATE_FORMAT argument in a cast to TIMESTAMP;
-    # preserve that emission when the source was parsed by ClickZetta itself.
+    """Route DATE_FORMAT-family functions to ClickZetta compatibility builtins
+    based on the source dialect stamp (set by sqlglot_clickzetta.compat).
+
+    - MySQL family → DATE_FORMAT_MYSQL (or plain DATE_FORMAT for a small
+      whitelist of formats ClickZetta natively understands).
+    - ClickHouse FORMATDATETIME → DATE_FORMAT_MYSQL with the format verbatim
+      (v30's parser does not convert MySQL-style %-tokens there).
+    - ClickZetta source / no stamp → v23 parity: CAST wrap + ClickZetta
+      inverse mapping.
+
+    NOTE: Postgres/Redshift TO_CHAR is NOT routed here — the engine's
+    DATE_FORMAT_PG builtin needs the user's format verbatim, and PG's parse
+    normalizes dd/DD and yyyy/YYYY case variants to the same python token,
+    destroying the original casing. That remap stays read-side in compat.
+    """
+    dialect = self.sql(e.parent_select, "dialect")
+    fmt = e.text("format")
+
+    if dialect == "CLICKHOUSE":
+        this = e.this
+        if isinstance(this, (exp.TimeStrToTime, exp.TsOrDsToTimestamp)):
+            this = this.this
+        return self.func("DATE_FORMAT_MYSQL", this, exp.Literal.string(fmt))
+
+    if dialect in MYSQL_FAMILY_STAMPS:
+        source = STAMP_TO_DIALECT[dialect]
+        restored = time.format_time(fmt, source.INVERSE_TIME_MAPPING, source.INVERSE_TIME_TRIE)
+        this = e.this
+        if isinstance(this, (exp.TimeStrToTime, exp.TsOrDsToTimestamp)):
+            this = this.this
+        if restored in ("yyyyMMdd", "yyyy-MM-dd", "yyyy-MM-dd HH:mm:ss"):
+            return self.func("DATE_FORMAT", this, exp.Literal.string(restored))
+        return self.func("DATE_FORMAT_MYSQL", this, exp.Literal.string(restored))
+
+    # ClickZetta-read DATE_FORMAT: v23 wrapped the first argument in a cast to
+    # TIMESTAMP; the parser stores the format raw (see the DATE_FORMAT builder
+    # in Parser.FUNCTIONS), so invert it back through ClickZetta's mapping.
     this = e.this
     if isinstance(this, exp.TimeStrToTime):
         this = exp.Cast(this=this.this, to=exp.DataType(this=exp.DataType.Type.TIMESTAMP))
-    # The parser stores the format strftime-ized; generation inverts it back
-    # through the dialect's mapping, like the default timetostr_sql did in v23.
-    fmt = time.format_time(
-        e.text("format"), self.dialect.INVERSE_TIME_MAPPING, self.dialect.INVERSE_TIME_TRIE
+    restored = time.format_time(
+        fmt, self.dialect.INVERSE_TIME_MAPPING, self.dialect.INVERSE_TIME_TRIE
     )
-    return self.func("DATE_FORMAT", this, exp.Literal.string(fmt))
+    return self.func("DATE_FORMAT", this, exp.Literal.string(restored))
 
 
 def _split_sql(self: ClickZetta.Generator, e: exp.Split) -> str:
@@ -733,6 +823,7 @@ class ClickZetta(Spark):
             exp.Group: transforms.preprocess([_transform_group_sql]),
             exp.RegexpLike: rename_func("RLIKE"),
             exp.Grouping: _grouping_sql,
+            exp.Trunc: _trunc_sql,
             exp.ParseDatetime: _parse_datetime_sql,
             exp.DayOfWeek: _dayofweek_sql,
             exp.YearOfWeek: _yearofweek_sql,

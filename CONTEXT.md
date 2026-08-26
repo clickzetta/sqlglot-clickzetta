@@ -28,11 +28,12 @@ Real engine functions — routing source-dialect calls to them is a faithful
 rename, not a semantic transform.
 
 **Compat module**:
-The plugin's `compat` — an explicit opt-in module containing all surviving
-cross-dialect patches (source-dialect stamping, Presto-DLC tolerance, Doris
-feature gaps, compatibility-builtin routing). Installing the plugin or using
-the `clickzetta` dialect alone mutates nothing; only `import
-sqlglot_clickzetta.compat` arms the patches.
+The plugin's `compat` — an explicit opt-in module arming the surviving
+cross-dialect patches: source-dialect stamping, Presto-DLC `date_add`
+tolerance, Doris/StarRocks table-feature gaps, and the `TO_CHAR` verbatim
+remap. Compatibility-builtin *routing* for everything else lives in the
+dialect generator, keyed on the stamp. Installing the plugin or using the
+`clickzetta` dialect alone mutates nothing.
 _Avoid_: settings (the old filename `local_clickzetta_settings.py` is
 historical and misleading), lazy patching (rejected: surprises public-PyPI
 strangers)

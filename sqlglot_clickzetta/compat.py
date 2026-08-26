@@ -1,10 +1,10 @@
 """ClickZetta cross-dialect compatibility patches.
 
 Importing this module arms monkey-patches that make upstream sqlglot dialects
-accept ClickZetta-extended input: Presto-DLC syntax, Doris/StarRocks table
-features upstream lacks, function routing to ClickZetta compatibility
-builtins (DATE_FORMAT_MYSQL, ...), and source-dialect stamping that the
-ClickZetta generator keys on. Installing the plugin or using the
+accept ClickZetta-extended input: Presto-DLC syntax and Doris/StarRocks table
+features upstream lacks, plus the source-dialect stamping that the ClickZetta
+generator keys on for compatibility-builtin routing (the routing itself lives
+in the dialect generator, not here). Installing the plugin or using the
 ``clickzetta`` dialect alone mutates nothing — only an explicit
 
     import sqlglot_clickzetta.compat
@@ -24,15 +24,10 @@ import typing as t
 
 from sqlglot import exp
 from sqlglot.dialects.athena import Athena
-from sqlglot.dialects.clickhouse import ClickHouse
 from sqlglot.dialects.doris import Doris
-from sqlglot.dialects.mysql import MySQL
-from sqlglot.dialects.postgres import Postgres
 from sqlglot.dialects.presto import Presto
-from sqlglot.dialects.redshift import Redshift
 from sqlglot.dialects.starrocks import StarRocks
 from sqlglot.dialects.trino import Trino
-from sqlglot.helper import seq_get
 from sqlglot.parser import Parser
 from sqlglot.tokens import TokenType
 
@@ -121,69 +116,26 @@ def _presto_date_add_parser(args: t.List) -> exp.DateAdd:
         return None
 
 
-for dialect in [MySQL, Presto, Trino, Athena, StarRocks, Doris]:
-    dialect.Parser.FUNCTIONS["DATE_FORMAT"] = lambda args: exp.Anonymous(
-        this="DATE_FORMAT_MYSQL", expressions=args
-    )
-    dialect.Parser.FUNCTIONS["AES_DECRYPT"] = lambda args: exp.Anonymous(
-        this="AES_DECRYPT_MYSQL", expressions=args
-    )
-    dialect.Parser.FUNCTIONS["AES_ENCRYPT"] = lambda args: exp.Anonymous(
-        this="AES_ENCRYPT_MYSQL", expressions=args
-    )
-
-# Override date_add for Presto-based dialects to support both 2 and 3 parameters
+# Override date_add for Presto-based dialects to support the Presto-DLC
+# 2-argument form alongside standard 3-argument Presto. This is parse
+# tolerance (the reader must accept the syntax), so it stays read-side.
+# Function *routing* to compatibility builtins (AES_*_MYSQL, DATE_FORMAT_PG,
+# TRUNCATE_PRESTO, DATE_FORMAT_MYSQL, ClickHouse function mappings) moved
+# into the dialect generator, keyed on the source-dialect stamp.
 for dialect in [Presto, Trino, Athena]:
     dialect.Parser.FUNCTIONS["DATE_ADD"] = _presto_date_add_parser
-    # Convert Presto's TRUNCATE to TRUNCATE_PRESTO to distinguish from ClickZetta's TRUNCATE
-    dialect.Parser.FUNCTIONS["TRUNCATE"] = lambda args: exp.Anonymous(
-        this="TRUNCATE_PRESTO", expressions=args
-    )
 
-ClickHouse.Parser.FUNCTIONS["FORMATDATETIME"] = lambda args: exp.Anonymous(
-    this="DATE_FORMAT_MYSQL", expressions=args
-)
+# TO_CHAR must stay read-side: the engine's DATE_FORMAT_PG builtin needs the
+# format verbatim, and PG's parse normalizes dd/DD and yyyy/YYYY case
+# variants to the same python token — the original casing is unrecoverable
+# from the AST (probe-verified), so we remap to an Anonymous carrier here.
+from sqlglot.dialects.postgres import Postgres
+from sqlglot.dialects.redshift import Redshift
 
 for dialect in [Postgres, Redshift]:
     dialect.Parser.FUNCTIONS["TO_CHAR"] = lambda args: exp.Anonymous(
         this="DATE_FORMAT_PG", expressions=args
     )
-
-# Add ClickHouse functions in a workaround way, delete after sqlglot supports it
-ClickHouse.Parser.FUNCTIONS["FROMUNIXTIMESTAMP64MILLI"] = lambda args: exp.UnixToTime(
-    this=seq_get(args, 0),
-    zone=seq_get(args, 1) if len(args) == 2 else None,
-    scale=exp.UnixToTime.MILLIS,
-)
-
-# Clickhouse's JSONExtract* and visitParamExtract*  will be parsed as JSONExtractScalar, which we do not support,
-# and different types need to be processed separately.
-# Notice: This will cause JSONEXTRACT* -> JSON_EXTRACT_PATH_TEXT related cases to fail.
-ClickHouse.Parser.FUNCTIONS["JSONEXTRACTSTRING"] = lambda args: exp.Anonymous(
-    this="JSONEXTRACTSTRING", expressions=args
-)
-ClickHouse.Parser.FUNCTIONS["VISITPARAMEXTRACTSTRING"] = lambda args: exp.Anonymous(
-    this="VISITPARAMEXTRACTSTRING", expressions=args
-)
-ClickHouse.Parser.FUNCTIONS["VISITPARAMEXTRACTRAW"] = lambda args: exp.Anonymous(
-    this="GET_JSON_OBJECT", expressions=args
-)
-ClickHouse.Parser.FUNCTIONS["SIMPLEJSONEXTRACTRAW"] = lambda args: exp.Anonymous(
-    this="GET_JSON_OBJECT", expressions=args
-)
-ClickHouse.Parser.FUNCTIONS["JSONEXTRACTRAW"] = lambda args: exp.Anonymous(
-    this="GET_JSON_OBJECT", expressions=args
-)
-
-# Clickhouse's toDateTime(expr[, timezone]) parameter expr supports String, Int, Date or DateTime.
-# To adapt to multiple types, we use the cast function for conversion.
-# Notice: This will cause TODATETIME -> CAST related cases to fail.
-ClickHouse.Parser.FUNCTIONS["TODATETIME"] = lambda args: exp.cast(
-    seq_get(args, 0), exp.DataType.Type.DATETIME
-)
-ClickHouse.Parser.FUNCTIONS["TODATE"] = lambda args: exp.cast(
-    seq_get(args, 0), exp.DataType.Type.DATE
-)
 
 
 # ---------------------------------------------------------------------------
