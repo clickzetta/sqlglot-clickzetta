@@ -25,9 +25,11 @@ import typing as t
 from sqlglot import exp
 from sqlglot.dialects.athena import Athena
 from sqlglot.dialects.doris import Doris
+from sqlglot.dialects.mysql import MySQL
 from sqlglot.dialects.presto import Presto
 from sqlglot.dialects.starrocks import StarRocks
 from sqlglot.dialects.trino import Trino
+from sqlglot.errors import ParseError
 from sqlglot.parser import Parser
 from sqlglot.tokens import TokenType
 
@@ -136,6 +138,39 @@ for dialect in [Postgres, Redshift]:
     dialect.Parser.FUNCTIONS["TO_CHAR"] = lambda args: exp.Anonymous(
         this="DATE_FORMAT_PG", expressions=args
     )
+
+
+def _ensure_plain_number_date_deltas():
+    """Older 30.x raises ParseError for DATE_ADD/DATE_SUB with plain-number
+    deltas (e.g. starrocks `DATE_SUB(d, -1)`); newer sqlglot builds a
+    DateAdd/DateSub with a defaulted DAY unit. Emulate the newer behavior
+    only when the installed sqlglot lacks it."""
+    from sqlglot import parse_one
+
+    try:
+        parse_one("SELECT DATE_SUB(CURRENT_DATE, -1)", read="starrocks")
+        return  # installed sqlglot already tolerates plain-number deltas
+    except ParseError:
+        pass
+
+    for dialect in (MySQL, StarRocks, Doris):
+        for name, cls in (("DATE_ADD", exp.DateAdd), ("DATE_SUB", exp.DateSub)):
+            original = dialect.Parser.FUNCTIONS.get(name)
+            if original is None:
+                continue
+
+            def tolerant(args, _original=original, _cls=cls):
+                try:
+                    return _original(args)
+                except ParseError:
+                    if len(args) >= 2:
+                        return _cls(this=args[0], expression=args[1], unit=exp.Var(this="DAY"))
+                    raise
+
+            dialect.Parser.FUNCTIONS[name] = tolerant
+
+
+_ensure_plain_number_date_deltas()
 
 
 # ---------------------------------------------------------------------------
@@ -653,7 +688,7 @@ ClickZetta.Generator.TYPE_MAPPING.update({
 # Update the Doris Parser's _parse_types method to handle these custom types
 original_doris_parse_types = Doris.Parser._parse_types
 
-def _patched_doris_parse_types(self, check_func=False, schema=False, allow_identifiers=True, with_collation=False):
+def _patched_doris_parse_types(self, check_func=False, schema=False, allow_identifiers=True, **kwargs):
     """Patched _parse_types to handle Doris-specific types."""
     # Check if current token is one of our custom Doris types
     if self._curr:
@@ -681,8 +716,10 @@ def _patched_doris_parse_types(self, check_func=False, schema=False, allow_ident
             self._advance()
             return self.expression(exp.DataType(this=exp.DataType.Type.BITMAP))
 
-    # Fall back to original implementation
-    return original_doris_parse_types(self, check_func=check_func, schema=schema, allow_identifiers=allow_identifiers, with_collation=with_collation)
+    # Fall back to original implementation (with_collation forwards where it exists)
+    return original_doris_parse_types(
+        self, check_func=check_func, schema=schema, allow_identifiers=allow_identifiers, **kwargs
+    )
 
 Doris.Parser._parse_types = _patched_doris_parse_types
 StarRocks.Parser._parse_types = _patched_doris_parse_types

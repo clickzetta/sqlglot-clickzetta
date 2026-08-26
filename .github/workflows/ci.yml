@@ -38,7 +38,7 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      - run: pip install -e ".[dev]"
+      - run: pip install -e ".[dev]" pytz
       - run: |
           git clone --depth 1 --branch v${SQLGLOT_LATEST} https://github.com/tobymao/sqlglot.git /tmp/sqlglot-src
           cd /tmp/sqlglot-src

@@ -678,7 +678,7 @@ class ClickZetta(Spark):
             expressions = self._parse_wrapped_csv(self._parse_id_var, optional=False)
             return self.expression(exp.UniqueKeyProperty(expressions=expressions))
 
-        def _parse_types(self, check_func=False, schema=False, allow_identifiers=True, with_collation=False):
+        def _parse_types(self, check_func=False, schema=False, allow_identifiers=True, **kwargs):
             """Override to handle BITMAP type."""
             # Check if current token is BITMAP
             if self._match_text_seq("BITMAP"):
@@ -687,7 +687,8 @@ class ClickZetta(Spark):
                 else:
                     # Map BITMAP to HLLSKETCH internally for consistency
                     return exp.DataType(this=exp.DataType.Type.HLLSKETCH, nested=False)
-            return super()._parse_types(check_func, schema, allow_identifiers, with_collation)
+            # with_collation only exists on newer 30.x — forward whatever came in
+            return super()._parse_types(check_func, schema, allow_identifiers, **kwargs)
 
         def _parse_schema(self, this=None):
             """Override to handle UNIQUE as a schema-level expression."""
