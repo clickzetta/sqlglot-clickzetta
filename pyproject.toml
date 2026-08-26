@@ -1,0 +1,37 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "sqlglot-clickzetta"
+version = "0.1.0"
+description = "ClickZetta dialect plugin for sqlglot"
+readme = "README.md"
+license = { file = "LICENSE" }
+authors = [{ name = "ClickZetta" }]
+requires-python = ">=3.10"
+dependencies = ["sqlglot>=30.2,<31"]
+keywords = ["sql", "clickzetta", "sqlglot", "transpiler", "parser"]
+classifiers = [
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+]
+
+[project.urls]
+Homepage = "https://github.com/clickzetta/sqlglot-clickzetta"
+
+# sqlglot discovers plugin dialects through this entry point (sqlglot >= 28.6).
+# Importing sqlglot_clickzetta must NOT arm the cross-dialect patches — those
+# live in sqlglot_clickzetta.compat and require an explicit import (ADR-0001).
+[project.entry-points."sqlglot.dialects"]
+clickzetta = "sqlglot_clickzetta:ClickZetta"
+
+[project.optional-dependencies]
+dev = ["pytest>=7"]
+
+[tool.hatch.build.targets.wheel]
+packages = ["sqlglot_clickzetta"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

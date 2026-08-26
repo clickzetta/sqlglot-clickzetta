@@ -1,0 +1,45 @@
+name: CI
+
+on:
+  push:
+    branches: [main, plugin]
+  pull_request:
+
+env:
+  SQLGLOT_FLOOR: "30.2.0"
+  SQLGLOT_LATEST: "30.17.0"
+
+jobs:
+  # ADR-0002: the plugin suite is the parity net. It runs with compat armed
+  # (tests/conftest.py) plus a subprocess leg proving bare installs mutate
+  # nothing (tests/test_bare.py).
+  plugin-tests:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ["3.10", "3.11", "3.12", "3.13"]
+        sqlglot: ["30.2.0", "30.17.0"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+      - run: pip install -e ".[dev]" "sqlglot==${{ matrix.sqlglot }}"
+      - run: python -m pytest tests/ -q
+
+  # ADR-0001: with the plugin installed (entry point active) but compat NOT
+  # imported, upstream's own dialect suite must stay green — installing the
+  # plugin never changes how other dialects parse.
+  upstream-contamination-check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install -e ".[dev]"
+      - run: |
+          git clone --depth 1 --branch v${SQLGLOT_LATEST} https://github.com/tobymao/sqlglot.git /tmp/sqlglot-src
+          cd /tmp/sqlglot-src
+          python -m pytest tests/dialects -q -p no:cacheprovider
